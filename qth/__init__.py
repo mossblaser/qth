@@ -26,9 +26,9 @@ class FunctionTimeoutError(Exception):
 
 class Client(object):
     
-    def __init__(self, node_id, prefix="", loop=None,
+    def __init__(self, client_id, prefix="", loop=None,
                  host="localhost", port=1883, keepalive=10):
-        self._node_id = node_id
+        self._client_id = client_id
         self._prefix = prefix
         self._loop = loop or asyncio.get_event_loop()
 
@@ -40,10 +40,20 @@ class Client(object):
         # List of topic, qos pairs to subscribe to
         self._subscriptions = set()
         
-        # Event which is set when connected and cleared when disconnected
+        # Event which is set when connecting/connected and cleared when
+        # disconnected
         self._connected_event = asyncio.Event()
 
+        # The registration data (sent to the Qth registration system) for this
+        # client.
+        self._registration = {}
+
         self._mqtt = aiomqtt.Client(self._loop)
+        
+        # Clear the registration when we disconnect ungracefully (this class
+        # don't provide any way to disconnect...).
+        self._mqtt.will_set("meta/clients/{}".format(self._client_id),
+                            "null", qos=2, retain=False)
         
         self._mqtt.on_connect = self._on_connect
         self._mqtt.on_disconnect = self._on_disconnect
@@ -52,13 +62,23 @@ class Client(object):
         self._mqtt.on_subscribe = self._on_subscribe
         self._mqtt.on_unsubscribe = self._on_unsubscribe
         
+        self._mqtt.loop_start()
         self._mqtt.connect_async(host, port, keepalive)
     
     def _on_connect(self, _mqtt, _userdata, flags, rc):
         async def f():
+            # Re-subscribe to all subscriptions
             if self._subscriptions:
                 await self._subscribe(list(self._subscriptions))
+            print("subs published")
+            
+            # Publish any paths to the Qth registry
+            await self.publish_registration()
+            print("reg published")
+            
+            # Unblock anything waiting for connection to complete
             self._connected_event.set()
+            print("unwaiting")
         self._loop.create_task(f())
     
     def _on_disconnect(self, _mqtt, _userdata, rc):
@@ -156,6 +176,20 @@ class Client(object):
             if e.code != aiomqtt.MQTT_ERR_NO_CONN:
                 raise
     
+    async def _publish(self, topic, payload, qos=2, retain=False):
+        """Publish a message, waiting until connected and the publication has
+        been acknowledged.
+        """
+        mid = None
+        result, mid = self._mqtt.publish(topic, payload, qos, retain)
+        if result != aiomqtt.MQTT_ERR_SUCCESS:
+            raise MQTTError(result)
+        
+        # Wait for the message to be confirmed published
+        future = asyncio.Future(loop=self._loop)
+        self._publish_mid_to_future[mid] = future
+        await future
+    
     async def publish(self, topic, payload, qos=2, retain=False):
         """Publish a message, waiting until connected and the publication has
         been acknowledged.
@@ -163,15 +197,11 @@ class Client(object):
         mid = None
         while mid is None:
             await self.ensure_connected()
-            result, mid = self._mqtt.publish(topic, payload, qos, retain)
-            if result == aiomqtt.MQTT_ERR_SUCCESS:
-                break
-            elif result != aiomqtt.MQTT_ERR_NO_CONN:
-                raise MQTTError(result)
-        
-        future = asyncio.Future(loop=self._loop)
-        self._publish_mid_to_future[mid] = future
-        await future
+            try:
+                return await self._publish(topic, payload, qos, retain)
+            except MQTTError as e:
+                if e.code != aiomqtt.MQTT_ERR_NO_CONN:
+                    raise
     
     async def create_function(self, topic, f):
         """Expose a function 'f' via MQTT, without registering it.
@@ -230,7 +260,7 @@ class Client(object):
         
         See create_function for a description of the calling convention used.
         """
-        randid = "{}-{}".format(self._node_id, random.random())
+        randid = "{}-{}".format(self._client_id, random.random())
         
         call_topic = "{}/{}".format(topic, randid)
         resp_topic = "{}/{}/response".format(topic, randid)
@@ -238,7 +268,7 @@ class Client(object):
         response = asyncio.Future(loop=self._loop)
         
         # Subscribe to the response
-        await self.subscribe(resp_topic, lambda msg: response.set_result(msg))
+        await self.subscribe(resp_topic, lambda msg: response.set_result(msg) if not response.done() else None)
         try:
             # Send the call
             await self.publish(call_topic, json.dumps({"args": args, "kwargs": kwargs}))
@@ -255,3 +285,35 @@ class Client(object):
         finally:
             # Unsubscribe from further replies
             await self.unsubscribe(resp_topic)
+    
+    async def publish_registration(self):
+        """Publish the Qth client registration message, if connected.
+        
+        This method is called automatically whenever it is required. It is
+        unlikely you'll need to call this by hand.
+        """
+        await self._publish("meta/clients/{}".format(self._client_id),
+                            json.dumps(self._registration),
+                            qos=2, retain=True)
+    
+    async def register(self, path, type, description):
+        """Register a path with the Qth registration system.
+        """
+        self._registration[path] = {
+            "type": type,
+            "description": description
+        }
+        
+        try:
+            await self.publish_registration()
+        except MQTTError:
+            pass
+    
+    async def unregister(self, path):
+        """Unregister a path with the Qth registration system."""
+        self._registration.pop(path, None)
+        
+        try:
+            await self.publish_registration()
+        except MQTTError:
+            pass
