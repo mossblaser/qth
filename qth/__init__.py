@@ -55,8 +55,8 @@ class Client(object):
         self._subscribe_mid_to_future = {}
         self._unsubscribe_mid_to_future = {}
 
-        # List of topic, qos pairs to subscribe to
-        self._subscriptions = set()
+        # Mapping from topics to lists of callbacks for that topic
+        self._subscriptions = {}
 
         # Event which is set when connecting/connected and cleared when
         # disconnected
@@ -78,7 +78,6 @@ class Client(object):
 
         self._mqtt.on_connect = self._on_connect
         self._mqtt.on_disconnect = self._on_disconnect
-        self._mqtt.on_message = self._on_message
         self._mqtt.on_publish = self._on_publish
         self._mqtt.on_subscribe = self._on_subscribe
         self._mqtt.on_unsubscribe = self._on_unsubscribe
@@ -92,7 +91,9 @@ class Client(object):
         async def f():
             # Re-subscribe to all subscriptions
             if self._subscriptions:
-                await self._subscribe(list(self._subscriptions))
+                await self._subscribe([(topic, 2)
+                                       for topic
+                                       in self._subscriptions])
 
             # Publish any paths to the Qth registry
             await self.publish_registration()
@@ -105,9 +106,6 @@ class Client(object):
         self._connected_event.clear()
         self._disconnected_event.set()
 
-    def _on_message(self, _mqtt, _userdata, message):
-        pass
-
     def _on_publish(self, _mqtt, _userdata, mid):
         future = self._publish_mid_to_future.get(mid)
         if future is not None:
@@ -116,12 +114,22 @@ class Client(object):
     def _on_subscribe(self, _mqtt, _userdata, mid, granted_qos):
         future = self._subscribe_mid_to_future.get(mid)
         if future is not None:
-            future.set_result(granted_qos)
+            future.set_result(None)
 
     def _on_unsubscribe(self, _mqtt, _userdata, mid):
         future = self._unsubscribe_mid_to_future.get(mid)
         if future is not None:
             future.set_result(None)
+
+    def _on_message(self, nominal_topic, _mqtt, _userdata, message):
+        # Run all callbacks associated with the nominal topic
+        for callback in self._subscriptions.get(nominal_topic, []):
+            try:
+                retval = callback(message.topic, message.payload)
+                if inspect.isawaitable(retval):
+                    self._loop.create_task(retval)
+            except:
+                traceback.print_exc()
 
     async def close(self):
         """Permanently close the connection to the MQTT server."""
@@ -129,7 +137,7 @@ class Client(object):
             # Indicate disconnection to registration server. If this fails
             # it'll be sorted out by the will.
             await self._publish("meta/clients/{}".format(self._client_id),
-                                "null", qos=2, retain=False)
+                                "null", retain=False)
 
             # Actually disconnect
             self._mqtt.disconnect()
@@ -147,13 +155,13 @@ class Client(object):
         """
         await self._connected_event.wait()
 
-    async def _subscribe(self, topic, qos=2):
+    async def _subscribe(self, topic):
         """(Internal use only.) Subscribe to a (set of) topic(s) and wait until
         the subscription is confirmed. Must be called while connected. Does not
         update the list of subscribed topics.
         """
         # Subscribe to the topic(s)
-        result, mid = self._mqtt.subscribe(topic, qos)
+        result, mid = self._mqtt.subscribe(topic, 2)
         if result != aiomqtt.MQTT_ERR_SUCCESS:
             raise MQTTError(result)
 
@@ -162,13 +170,15 @@ class Client(object):
         self._subscribe_mid_to_future[mid] = future
         await future
 
-    async def subscribe(self, topic, callback, qos=2):
-        """Coroutine which subscribes to a MQTT topic and registers a callback
-        for message arrival on that topic. Returns once the subscription has
-        been confirmed.
+    async def subscribe(self, topic, callback):
+        """Coroutine which subscribes to a MQTT topic (with QoS 2) and
+        registers a callback for message arrival on that topic. Returns once
+        the subscription has been confirmed.
 
         If the client reconnects, the subscription will be automatically
         renewed.
+
+        Many callbacks may be associated with the same topic.
 
         Parameters
         ----------
@@ -178,30 +188,28 @@ class Client(object):
             A callback function or coroutine to call when a message matching
             this subscription is received. The function will be called with a
             two arguments: the topic and the payload.
-
-            .. note::
-                If this subscription overlaps with an existing subscription it
-                is undefined which callback(s) will be called.
         """
-        # Setup a callback (this persists across reconnects)
-        @functools.wraps(callback)
-        def wrapper(_client, _userdata, message):
-            retval = callback(message.topic, message.payload)
-            if inspect.isawaitable(retval):
-                self._loop.create_task(retval)
-        self._mqtt.message_callback_add(topic, wrapper)
+        new_subscription = topic not in self._subscriptions
 
-        # Keep a list of the subscribed topics to resubscribe on reconnect
-        self._subscriptions.add((topic, qos))
+        # Setup a handler to handle messages to this topic
+        if new_subscription:
+            self._mqtt.message_callback_add(
+                topic,
+                functools.partial(self._on_message, topic))
+            self._subscriptions[topic] = []
 
-        # If currently connected, subscribe
-        try:
-            await self._subscribe(topic, qos)
-        except MQTTError as e:
-            # May have disconnected while subscribing, just give up and wait
-            # for reconnect in this case.
-            if e.code != aiomqtt.MQTT_ERR_NO_CONN:
-                raise
+        # Register the user-supplied callback
+        self._subscriptions[topic].append(callback)
+
+        # If required and currently connected, subscribe
+        if new_subscription:
+            try:
+                await self._subscribe(topic)
+            except MQTTError as e:
+                # May have disconnected while subscribing, just give up and
+                # wait for reconnect in this case.
+                if e.code != aiomqtt.MQTT_ERR_NO_CONN:
+                    raise
 
     async def _unsubscribe(self, topic):
         """(Internal use only.) Unsubscrube from a topic. Must be called while
@@ -216,41 +224,40 @@ class Client(object):
         self._unsubscribe_mid_to_future[mid] = future
         await future
 
-    async def unsubscribe(self, topic):
+    async def unsubscribe(self, topic, callback):
         """Unsubscribe from a topic.
 
         Parameters
         ----------
         topic : str
             The topic pattern used when subscribing.
+        callback : function or coroutine
+            The callback or coroutine used when subscribing.
         """
-        # Normalise topic to list of topics
-        if isinstance(topic,  str):
-            topic = [topic]
+        callbacks = self._subscriptions[topic]
+        callbacks.remove(callback)
 
-        for topic_name in topic:
-            # Prevent resubscription occurring
-            for qos in [1, 2, 3]:
-                self._subscriptions.discard((topic_name, qos))
+        # Unsubscribe completely if no more callbacks are associated.
+        if not callbacks:
+            # Remove the callback topic and MQTT client callback
+            del self._subscriptions[topic]
+            self._mqtt.message_callback_remove(topic)
 
-            # Remove all callbacks
-            self._mqtt.message_callback_remove(topic_name)
+            # Unregister with the broker
+            try:
+                result, mid = self._mqtt.unsubscribe(topic)
+            except MQTTError as e:
+                # If we're not connected, we didn't need to do anything anyway
+                # so just give up!
+                if e.code != aiomqtt.MQTT_ERR_NO_CONN:
+                    raise
 
-        # Unregister with the broker
-        try:
-            result, mid = self._mqtt.unsubscribe(topic)
-        except MQTTError as e:
-            # If we're not connected, we didn't need to do anything anyway so
-            # just give up!
-            if e.code != aiomqtt.MQTT_ERR_NO_CONN:
-                raise
-
-    async def _publish(self, topic, payload, qos=2, retain=False):
+    async def _publish(self, topic, payload, retain=False):
         """(Internal use only.) Publish a message, waiting until the
         publication has been acknowledged.
         """
         mid = None
-        result, mid = self._mqtt.publish(topic, payload, qos, retain)
+        result, mid = self._mqtt.publish(topic, payload, 2, retain)
         if result != aiomqtt.MQTT_ERR_SUCCESS:
             raise MQTTError(result)
 
@@ -259,9 +266,9 @@ class Client(object):
         self._publish_mid_to_future[mid] = future
         await future
 
-    async def publish(self, topic, payload, qos=2, retain=False):
-        """Publish a message, waiting until connected and the publication has
-        been acknowledged.
+    async def publish(self, topic, payload, retain=False):
+        """Publish a message with QoS 2, waiting until connected and the
+        publication has been acknowledged.
 
         Parameters
         ----------
@@ -269,8 +276,6 @@ class Client(object):
             The topic to publish to
         payload : str or bytes
             The payload of the message
-        qos : int
-            The MQTT QoS level.
         retain : bool
             Should the message be retained by the MQTT server?
         """
@@ -278,7 +283,7 @@ class Client(object):
         while mid is None:
             await self.ensure_connected()
             try:
-                return await self._publish(topic, payload, qos, retain)
+                return await self._publish(topic, payload, retain)
             except MQTTError as e:
                 if e.code != aiomqtt.MQTT_ERR_NO_CONN:
                     raise
@@ -341,8 +346,9 @@ class Client(object):
         response = asyncio.Future(loop=self._loop)
 
         # Subscribe to the response
-        await self.subscribe(resp_topic, (lambda t, p: response.set_result(p)
-                                          if not response.done() else None))
+        subscription_callback = (lambda t, p: response.set_result(p)
+                                 if not response.done() else None)
+        await self.subscribe(resp_topic, subscription_callback)
         try:
             # Send the call
             await self.publish(call_topic, json.dumps({"args": args,
@@ -361,7 +367,7 @@ class Client(object):
             raise FunctionTimeoutError(topic)
         finally:
             # Unsubscribe from further replies
-            await self.unsubscribe(resp_topic)
+            await self.unsubscribe(resp_topic, subscription_callback)
 
     async def publish_registration(self):
         """Publish the Qth client registration message, if connected.
@@ -372,7 +378,7 @@ class Client(object):
         """
         await self._publish("meta/clients/{}".format(self._client_id),
                             json.dumps(self._registration),
-                            qos=2, retain=True)
+                            retain=True)
 
     async def register(self, path, behaviour, description):
         """Register a path with the Qth registration system.

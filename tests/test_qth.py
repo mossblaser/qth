@@ -72,7 +72,7 @@ async def test_sub_pub_unsub(client, event_loop):
     # Unsubscribe and check we don't get a message
     on_message.reset_mock()
     on_message_evt.clear()
-    await client.unsubscribe("test/foo")
+    await client.unsubscribe("test/foo", on_message)
     await client.publish("test/foo", "hello")
     await asyncio.sleep(0.1, loop=event_loop)
     assert not on_message.called
@@ -94,6 +94,42 @@ async def test_pub_sub_coroutine(client, event_loop):
     assert not on_message_evt.is_set()
     await client.publish("test/foo", "hello")
     await asyncio.wait_for(on_message_evt.wait(), 5.0, loop=event_loop)
+
+
+@pytest.mark.asyncio
+async def test_sub_pub_unsub_multiple(client, event_loop):
+    # Subscribe to the same topic several times
+    callback_a = Mock(side_effect=Exception())
+    callback_b = Mock()
+    callback_c = Mock()
+    await client.subscribe("test/foo", callback_a)
+    await client.subscribe("test/foo", callback_b)
+    await client.subscribe("test/foo", callback_c)
+    await client.subscribe("test/foo", callback_c)
+
+    # Publish to test/foo and check we get the message
+    await client.publish("test/foo", "hello")
+    await asyncio.sleep(0.1, loop=event_loop)
+
+    # Should have been called appropriate number of times
+    assert callback_a.call_count == 1
+    assert callback_b.call_count == 1
+    assert callback_c.call_count == 2
+
+    # Should be able to unsubscribe from a single instance of the repeated
+    # callback
+    await client.unsubscribe("test/foo", callback_c)
+    await client.publish("test/foo", "hello")
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert callback_a.call_count == 2
+    assert callback_b.call_count == 2
+    assert callback_c.call_count == 3
+
+    # Should be able to unsubscribe completely
+    await client.unsubscribe("test/foo", callback_a)
+    await client.unsubscribe("test/foo", callback_b)
+    await client.unsubscribe("test/foo", callback_c)
+    assert client._subscriptions == {}
 
 
 @pytest.mark.asyncio
