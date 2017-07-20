@@ -83,8 +83,8 @@ All payloads should be valid JSON values, for example `null`, `true`, `1.5`,
 
 ### Message semantics
 
-The following conventions should be used for each of the following types of
-signalling.
+The following conventions should be used for each of the following signalling
+behaviours.
 
 #### Ephemeral events
 
@@ -223,11 +223,11 @@ following form:
 Each value in the paths dictionary should be of the following form:
 
     {
-        "type": <TYPE NAME HERE>,
+        "behaviour": <BEHAVIOUR NAME HERE>,
         "description": "Brief human-readble description, stating units etc.",
     }
 
-The following types are defined below and correspond to the conventions
+The following behaviours are defined below and correspond to the conventions
 described earlier:
 
 * `"ephemeral"` (e.g. motion detectors)
@@ -252,7 +252,7 @@ The messages in each path will have the following form:
     {
         "subpath": [
             {
-                "type": <TYPE NAME HERE>,
+                "behaviour": <BEHAVIOUR NAME HERE>,
                 "description": "Brief description here.",
                 "client": "client id here"
             },
@@ -268,8 +268,8 @@ connection with the addition of a "client" field giving the client's ID.
 Path descriptions are stored in a list (in order of registration) to account
 for the fact a path may be both an path in its own right and a directory at the
 same time (e.g. the paths `lounge/light` and `lounge/light/timeout` may exist
-simultaneously). When a path is also a directory the special type `"directory"`
-will be given in the path description.
+simultaneously). When a path is also a directory the special behaviour
+`"directory"` will be given in the path description.
 
 Note that paths are named as subpaths so for example in `meta/ls/some` the path
 `some/path` will be listed as `path`.
