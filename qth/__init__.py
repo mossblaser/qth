@@ -3,7 +3,6 @@ import functools
 import json
 import inspect
 import traceback
-import random
 
 import aiomqtt
 
@@ -122,8 +121,9 @@ class Client(object):
             future.set_result(None)
 
     def _on_message(self, nominal_topic, _mqtt, _userdata, message):
-        # Run all callbacks associated with the nominal topic
-        for callback in self._subscriptions.get(nominal_topic, []):
+        # Run all callbacks associated with the nominal topic. Copy taken in
+        # case a callback results in (un)subscription.
+        for callback in list(self._subscriptions.get(nominal_topic, [])):
             try:
                 retval = callback(message.topic, message.payload)
                 if inspect.isawaitable(retval):
@@ -287,87 +287,6 @@ class Client(object):
             except MQTTError as e:
                 if e.code != aiomqtt.MQTT_ERR_NO_CONN:
                     raise
-
-    async def create_function(self, topic, f):
-        """Expose a request-response function 'f' using the Qth convention.
-        Note that you must register this function yourself.
-
-        Parameters
-        ----------
-        topic : str
-            The base topic name for the function.
-        f : function or coroutine
-            The function or coroutine to expose. This function will be called
-            with the arguments received. Its return value or exception will be
-            returned.  This function should be re-entrant (if a coroutine) as
-            calls are not queued.
-        """
-        async def callback(topic, payload):
-            topic = topic
-            value = None
-            error = None
-            try:
-                # Run the user's function, passing in the arguments
-                args = json.loads(payload)
-                value = f(*args["args"], **args["kwargs"])
-
-                # If function is asynchronous, let it complete...
-                if inspect.isawaitable(value):
-                    value = await value
-            except Exception as e:
-                error = str(e)
-                traceback.print_exc()
-
-            # Send the response
-            await self.publish("{}/response".format(topic),
-                               json.dumps({"error": error,
-                                           "value": value}))
-
-        await self.subscribe("{}/+".format(topic), callback)
-
-    async def call(self, topic, *args, timeout=5, **kwargs):
-        """Call a function using the Qth convention (e.g. using
-        create_function).
-
-        Parameters
-        ----------
-        topic : string
-            The topic name of the function to call.
-        *args, **kwargs
-            The arguments for the function.
-        timeout : float
-            Number of seconds to wait for a response before timing out.
-        """
-        randid = "{}-{}".format(self._client_id, random.random())
-
-        call_topic = "{}/{}".format(topic, randid)
-        resp_topic = "{}/{}/response".format(topic, randid)
-
-        response = asyncio.Future(loop=self._loop)
-
-        # Subscribe to the response
-        subscription_callback = (lambda t, p: response.set_result(p)
-                                 if not response.done() else None)
-        await self.subscribe(resp_topic, subscription_callback)
-        try:
-            # Send the call
-            await self.publish(call_topic, json.dumps({"args": args,
-                                                       "kwargs": kwargs}))
-
-            # Wait for the reply
-            payload = await asyncio.wait_for(response,
-                                             timeout,
-                                             loop=self._loop)
-            response = json.loads(payload)
-            if response.get("error") is not None:
-                raise FunctionError("{}: {}".format(topic, response["error"]))
-            else:
-                return response["value"]
-        except asyncio.TimeoutError:
-            raise FunctionTimeoutError(topic)
-        finally:
-            # Unsubscribe from further replies
-            await self.unsubscribe(resp_topic, subscription_callback)
 
     async def publish_registration(self):
         """Publish the Qth client registration message, if connected.

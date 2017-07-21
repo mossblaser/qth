@@ -133,43 +133,6 @@ async def test_sub_pub_unsub_multiple(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_functions(client, event_loop):
-    def my_function(a, b, c):
-        if a != b != c:
-            return [a + b, c]
-        else:
-            raise Exception("Numbers are same!")
-
-    await client.create_function("test/myfunc", my_function)
-
-    # Function call works correctly and can accept and return non-trivial types
-    assert await client.call("test/myfunc", 1, c={"three": 3}, b=2) == [
-        3, {"three": 3}]
-
-    # Exceptions are returned to the caller
-    with pytest.raises(qth.FunctionError):
-        await client.call("test/myfunc", 1, 1, 1)
-
-    # Timeouts work for non-existant functions
-    before = event_loop.time()
-    with pytest.raises(qth.FunctionTimeoutError):
-        await client.call("test/notexist", timeout=0.1)
-    after = event_loop.time()
-    assert after - before >= 0.1
-
-
-@pytest.mark.asyncio
-async def test_coroutines(client, event_loop):
-    # Should be able to call coroutines too!
-    async def my_coroutine(a, b):
-        await asyncio.sleep(0.1, loop=event_loop)
-        return a + b
-
-    await client.create_function("test/mycoro", my_coroutine)
-    assert await client.call("test/mycoro", 1, 2) == 3
-
-
-@pytest.mark.asyncio
 async def test_register(client, hostname, port, event_loop):
     # Make a client to check the registrations of
     dut = qth.Client("test-monitor", host=hostname, port=port, loop=event_loop)

@@ -38,13 +38,8 @@ systems and networks.
 
 Unfortunately, MQTT isn't perfect. In particular:
 
-* **MQTT's messaging model does not incorporate a request-response style
-  mechanism.** In SHET a common pattern was for software, such as lighting
-  control logic, to expose its configuration interface via the home automation
-  messaging system. This pattern proved very convenient as it avoided the need
-  for users to find the machine and config file needed for simple changes to be
-  made. Such interfaces occasionally call for request-response style
-  interfaces.
+* **Semantics are not explicitly defined.** Qth defines a set of standard
+  usage patterns and specifies JSON payloads to reduce ambiguity.
 
 * **MQTT doesn't provide a way to list available endpoints in the system.** For
   example, there would be no way to know what sensors are available in a room
@@ -144,47 +139,6 @@ NB: This is distinct from the 'actuator states' pattern in that properties do
 not directly reflect the state of a system but instead represent parameters for
 a system. This difference is just semantic.
 
-#### Request-response (function) call
-
-* Examples: Requesting face detection be performed and receiving a list of
-  faces back or querying the historical state of a sensor.
-* Message types: See below.
-* Payload: See below.
-* Frequency: Only when called.
-* Published by: See below.
-* Subscribed to by: See below.
-* QoS: 2 (exactly-once delivery)
-
-Like other systems a function has a nominal path, for example `my/func`. A
-request-response exchange between a caller and callee works as follows:
-
-* At system startup, the callee subscribes to `{function name}/+` (e.g.
-  `my/func/+`.
-* When a caller wishes to call the function the caller first generates a random
-  ID.
-* The caller subscribes to a path of the form `{function
-  path}/{random id}/response` and waits for the subscription to be set up.
-  (e.g. `my/func/435432/response`.)
-* The caller publishes a non-persistent message to `{function path}/{random
-  id}` with a payload containing a JSON object of the following form: `{"args":
-  [...], "kwargs": {...}}`. The JSON object defines the list of position
-  arguments (args) and dictionary of keyword arguments (kwargs) to call the
-  function with. For example `my/func/435432` may be called with a payload of
-  `{"args": [123, "hello"], "kwargs": {"example": true}}`. This would translate
-  into a function call like `func(123, "hello", example=True)`.
-* The callee receives this message and executes the associated function call.
-* The callee publishes the result of the function call in a non-persistent
-  message to `{function path}/{random id}/response`. The payload of this
-  message will be a JSON object of the form `{"value": ..., "error": null or
-  string}. If the function failed to complete successfully a non-`null` error
-  string will be returned as the error and value will be `null`. If the
-  function returned successfully the value will be any valid JSON value and
-  error will be `null`.
-* The caller will receive the response and then unsubscribe from the response
-  topic. If no response is received after a reasonable delay (a few seconds),
-  the call is deemed to have timed out.
-
-
 ### Registration
 
 Devices and systems connected to a Qth-compliant system should register all
@@ -234,7 +188,6 @@ described earlier:
 * `"sensor"` (e.g. temperature)
 * `"state"` (e.g. light)
 * `"property"` (e.g. thermostat setpoint)
-* `"function"` (e.g. querying historical sensor states)
 
 
 #### Discovery
