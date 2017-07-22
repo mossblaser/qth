@@ -25,6 +25,65 @@ class FunctionTimeoutError(Exception):
     pass
 
 
+class PropertyWatcher(object):
+    """A utility class which allows convenient access to the most recent value
+    of a Qth property.
+    """
+
+    def __init__(self, client, topic):
+        """Using the supplied client, watch the supplied property."""
+        self._client = client
+        self._topic = topic
+
+        # The most recently received value
+        self._value = None
+
+        loop = self._client._loop
+
+        self._has_been_set = asyncio.Event(loop=loop)
+        loop.create_task(self._client.watch_property(topic, self))
+
+    def __call__(self, topic, new_value):
+        """Internal use only. The callback when the property value is
+        updated.
+        """
+        self._value = new_value
+        self._has_been_set.set()
+
+    @property
+    def value(self):
+        """The most recently received property value. If no value has yet been
+        received, this value will be None.
+
+        Calling `PropertyWatcher.wait` will wait until this property has a
+        valid value.
+        """
+        return self._value
+
+    @value.setter
+    def value(self, new_value):
+        """Try and set the value, at some point in the future.
+
+        .. warning::
+            If setting the property fails for any reason, there is no way to
+            discover this when using this API. Consider using the
+            `Client.set_property` instead.
+        """
+        self._client._loop.create_task(self._client.set_property(
+            self._topic,
+            new_value))
+
+    async def wait(self):
+        """Wait until the value of the property is known."""
+        await self._has_been_set.wait()
+
+    async def close(self):
+        """Permanently stop watching the property, invalidating the value of
+        this object.
+        """
+        await self._client.unwatch_property(self._topic, self)
+
+
 class Client(object):
     """A Qth-compliant MQTT client."""
 
@@ -84,6 +143,16 @@ class Client(object):
         self._mqtt.loop_start()
         self._mqtt.connect_async(host, port, keepalive)
 
+    async def _call_func_or_coro(self, f, *args, **kwargs):
+        """Internal use only. Call a function or coroutine and return the
+        result.
+        """
+        retval = f(*args, **kwargs)
+        if inspect.isawaitable(retval):
+            return await retval
+        else:
+            return retval
+
     def _on_connect(self, _mqtt, _userdata, flags, rc):
         self._disconnected_event.clear()
 
@@ -125,9 +194,10 @@ class Client(object):
         # case a callback results in (un)subscription.
         for callback in list(self._subscriptions.get(nominal_topic, [])):
             try:
-                retval = callback(message.topic, message.payload)
-                if inspect.isawaitable(retval):
-                    self._loop.create_task(retval)
+                self._loop.create_task(self._call_func_or_coro(
+                    callback,
+                    message.topic,
+                    json.loads(message.payload)))
             except:
                 traceback.print_exc()
 
@@ -137,7 +207,7 @@ class Client(object):
             # Indicate disconnection to registration server. If this fails
             # it'll be sorted out by the will.
             await self._publish("meta/clients/{}".format(self._client_id),
-                                "null", retain=False)
+                                None, retain=False)
 
             # Actually disconnect
             self._mqtt.disconnect()
@@ -178,7 +248,12 @@ class Client(object):
         If the client reconnects, the subscription will be automatically
         renewed.
 
-        Many callbacks may be associated with the same topic.
+        Many callbacks may be associated with the same topic pattern however
+        only one subscription with the MQTT server will be established. This
+        means that only the first subscription will receive an immediate
+        message report due to a retained message. Unfortunately since there is
+        no way for an MQTT client to determine if a message had the
+        ``retained`` flag set, it is not possible to work around this.
 
         Parameters
         ----------
@@ -187,7 +262,7 @@ class Client(object):
         callback : function or coroutine
             A callback function or coroutine to call when a message matching
             this subscription is received. The function will be called with a
-            two arguments: the topic and the payload.
+            two arguments: the topic and the deserialised payload.
         """
         new_subscription = topic not in self._subscriptions
 
@@ -257,7 +332,7 @@ class Client(object):
         publication has been acknowledged.
         """
         mid = None
-        result, mid = self._mqtt.publish(topic, payload, 2, retain)
+        result, mid = self._mqtt.publish(topic, json.dumps(payload), 2, retain)
         if result != aiomqtt.MQTT_ERR_SUCCESS:
             raise MQTTError(result)
 
@@ -274,7 +349,7 @@ class Client(object):
         ----------
         topic : str
             The topic to publish to
-        payload : str or bytes
+        payload : JSON-serialiseable value
             The payload of the message
         retain : bool
             Should the message be retained by the MQTT server?
@@ -296,7 +371,7 @@ class Client(object):
         hand.
         """
         await self._publish("meta/clients/{}".format(self._client_id),
-                            json.dumps(self._registration),
+                            self._registration,
                             retain=True)
 
     async def register(self, path, behaviour, description):
@@ -337,3 +412,105 @@ class Client(object):
             await self.publish_registration()
         except MQTTError:
             pass
+
+    async def send_event(self, topic, value=None):
+        """Convenience function which sends a Qth event.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        value : JSON-serialiseable
+            (Optional) JSON-serialiseable value to send with the event.
+        """
+        await self.publish(topic, value)
+
+    async def watch_event(self, topic, callback):
+        """Convenience function which calls a callback whenever a Qth event
+        occurs.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        callback : function or coroutine
+            This function or coroutine is called with the event topic and
+            deserialised value of the event when the event occurs.
+        """
+        await self.subscribe(topic, callback)
+
+    async def unwatch_event(self, topic, callback):
+        """Convenience function. Stop watching a particular Qth event."""
+        await self.unsubscribe(topic, callback)
+
+    async def set_property(self, topic, value):
+        """Convenience function which sets the value of a Qth property.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the property.
+        value : JSON-serialiseable
+            JSON-serialiseable value to set the property to.
+        """
+        await self.publish(topic, value, retain=True)
+
+    async def get_property(self, topic):
+        """Convenience function which returns a `PropertyWatcher` object.
+
+        Blocks until the property value is known.
+
+        .. warning::
+
+            Due to a limitation of the MQTT protocol, if the same property is
+            watched multiple times by the same client, only the first watcher
+            will receive a value immediately. Others will only receive values
+            set after watching.
+
+            This means that the property is already being watched this method
+            will block until the property is next watched.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        Returns
+        -------
+        PropertyWatcher
+            An interface to the current property value. The ``value`` field
+            will be updated with the most recent value of the property. Setting
+            the ``value`` will cause the property to be written
+
+            When you're finished with it either call
+            `PropertyWatcher.close` or ``Client.unwatch_property(topic, p)``
+            where ``topic`` is the topic of the property and ``p`` is the
+            `PropertyWatcher`.
+        """
+        p = PropertyWatcher(self, topic)
+        await p.wait()
+        return p
+
+    async def watch_property(self, topic, callback):
+        """Convenience function which calls a callback whenever a Qth property
+        is set.
+
+        .. warning::
+
+            Due to a limitation of the MQTT protocol, if the same property is
+            watched multiple times by the same client, only the first watcher
+            will receive a value immediately. Others will only receive values
+            set after watching.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        callback : function or coroutine
+            This function or coroutine is called with the topic and
+            deserialised value of the property when the property value is set.
+        """
+        await self.subscribe(topic, callback)
+
+    async def unwatch_property(self, topic, callback):
+        """Convenience function. Stop watching a particular Qth property."""
+        await self.unsubscribe(topic, callback)

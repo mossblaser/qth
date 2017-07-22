@@ -3,7 +3,6 @@ import pytest
 from mock import Mock
 
 import random
-import json
 
 import asyncio
 import qth
@@ -65,15 +64,15 @@ async def test_sub_pub_unsub(client, event_loop):
 
     # Publish to test/foo and check we get the message
     assert not on_message_evt.is_set()
-    await client.publish("test/foo", "hello")
+    await client.publish("test/foo", {"hello": "world"})
     await asyncio.wait_for(on_message_evt.wait(), 5.0, loop=event_loop)
-    on_message.assert_called_once_with("test/foo", b"hello")
+    on_message.assert_called_once_with("test/foo", {"hello": "world"})
 
     # Unsubscribe and check we don't get a message
     on_message.reset_mock()
     on_message_evt.clear()
     await client.unsubscribe("test/foo", on_message)
-    await client.publish("test/foo", "hello")
+    await client.publish("test/foo", {"hello": "there"})
     await asyncio.sleep(0.1, loop=event_loop)
     assert not on_message.called
 
@@ -85,14 +84,14 @@ async def test_pub_sub_coroutine(client, event_loop):
 
     async def on_message(message, payload):
         assert message == "test/foo"
-        assert payload == b"hello"
+        assert payload == {"hello": "world"}
         await asyncio.sleep(0.1, loop=event_loop)
         on_message_evt.set()
 
     await client.subscribe("test/foo", on_message)
 
     assert not on_message_evt.is_set()
-    await client.publish("test/foo", "hello")
+    await client.publish("test/foo", {"hello": "world"})
     await asyncio.wait_for(on_message_evt.wait(), 5.0, loop=event_loop)
 
 
@@ -150,7 +149,7 @@ async def test_register(client, hostname, port, event_loop):
         # See what we get!
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
-        assert json.loads(sub.mock_calls[-1][1][1]) == {
+        assert sub.mock_calls[-1][1][1] == {
             "test/someepehm": {
                 "behaviour": "ephemeral",
                 "description": "An example...",
@@ -166,7 +165,7 @@ async def test_register(client, hostname, port, event_loop):
         await dut.unregister("test/someepehm")
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
-        assert json.loads(sub.mock_calls[-1][1][1]) == {
+        assert sub.mock_calls[-1][1][1] == {
             "test/somesensor": {
                 "behaviour": "sensor",
                 "description": "Another example...",
@@ -178,6 +177,87 @@ async def test_register(client, hostname, port, event_loop):
         await dut.close()
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
-        assert sub.mock_calls[-1][1][1] == b"null"
+        assert sub.mock_calls[-1][1][1] is None
     finally:
         await dut.close()
+
+
+@pytest.mark.asyncio
+async def test_event(client, event_loop):
+    on_event_evt = asyncio.Event(loop=event_loop)
+    on_event = Mock(side_effect=lambda *_: on_event_evt.set())
+    await client.watch_event("test/event", on_event)
+
+    # Check default value is None
+    await client.send_event("test/event")
+    await asyncio.wait_for(on_event_evt.wait(), 0.5, loop=event_loop)
+    assert on_event.mock_calls[-1][1][1] is None
+
+    # Check JSON goes through
+    on_event_evt.clear()
+    await client.send_event("test/event", {"foo": "bar"})
+    await asyncio.wait_for(on_event_evt.wait(), 0.5, loop=event_loop)
+    assert on_event.mock_calls[-1][1][1] == {"foo": "bar"}
+
+    # Check unsubscribe works
+    await client.unwatch_event("test/event", on_event)
+    on_event_evt.clear()
+    await client.send_event("test/event")
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert not on_event_evt.is_set()
+
+
+@pytest.mark.asyncio
+async def test_property(client, event_loop):
+    on_property_evt = asyncio.Event(loop=event_loop)
+    on_property = Mock(side_effect=lambda *_: on_property_evt.set())
+    await client.watch_property("test/property", on_property)
+
+    # Check set and subscribe
+    await client.set_property("test/property", {"hello": "world"})
+    await asyncio.wait_for(on_property_evt.wait(), 0.5, loop=event_loop)
+    assert on_property.mock_calls[-1][1][1] == {"hello": "world"}
+
+    # Check unsubscribe works
+    await client.unwatch_property("test/property", on_property)
+    on_property_evt.clear()
+    await client.set_property("test/property", "foo")
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert not on_property_evt.is_set()
+
+
+@pytest.mark.asyncio
+async def test_property_watcher(client, event_loop):
+    # Ensure initial value gets through
+    await client.set_property("test/property", 123)
+    property = await client.get_property("test/property")
+    assert property.value == 123
+
+    # See if changes come through
+    await client.set_property("test/property", 321)
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert property.value == 321
+
+    # See if the value can be changed
+    on_property_evt = asyncio.Event(loop=event_loop)
+    on_property = Mock(side_effect=lambda *_: on_property_evt.set())
+    await client.watch_property("test/property", on_property)
+    property.value = "bam!"
+    await asyncio.wait_for(on_property_evt.wait(), 0.5, loop=event_loop)
+    assert on_property.mock_calls[-1][1][1] == "bam!"
+    await client.unwatch_property("test/property", on_property)
+
+    # Create another PropertyWatcher
+    await client.set_property("test/another_property", "bam!")
+    another_property = await client.get_property("test/another_property")
+    assert another_property.value == "bam!"
+
+    # Test both modes of closing
+    await client.unwatch_property("test/property", property)
+    await another_property.close()
+
+    # Values now shouldn't change when property does
+    await client.set_property("test/property", None)
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert property.value == "bam!"
+    assert another_property.value == "bam!"
