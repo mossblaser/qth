@@ -9,9 +9,9 @@ setup(
     packages=find_packages(),
 
     # Metadata for PyPi
-    url="https://github.com/mossblaser/aiomqtt",
+    url="https://github.com/mossblaser/qth",
     author="Jonathan Heathcote",
-    description="An AsyncIO asynchronous wrapper around paho-mqtt.",
+    description="Qb-Than's Home-automation messaging library.",
     license="GPLv2",
     classifiers=[
         "Development Status :: 3 - Alpha",
@@ -28,8 +28,8 @@ setup(
         "Programming Language :: Python :: 3.4",
         "Programming Language :: Python :: 3.5",
     ],
-    keywords="mqtt async asyncio wrapper paho-mqtt",
+    keywords="mqtt asyncio home-automation messaging",
 
     # Requirements
-    install_requires=["paho-mqtt>=1.3.0"],
+    install_requires=["aiomqtt>=0.1.0"],
 )
