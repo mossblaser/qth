@@ -116,6 +116,12 @@ class Client(object):
         # Mapping from topics to lists of callbacks for that topic
         self._subscriptions = {}
 
+        # When the 'retain all' subscription mode is used, this dict will have
+        # a value for the topic name. If no messages have been received for
+        # this topic the value will be None, otherwise it will be the last
+        # MQTTMessage object received for the topic.
+        self._subscription_retained_message = {}
+
         # Event which is set when connecting/connected and cleared when
         # disconnected
         self._connected_event = asyncio.Event(loop=self._loop)
@@ -190,14 +196,18 @@ class Client(object):
             future.set_result(None)
 
     def _on_message(self, nominal_topic, _mqtt, _userdata, message):
+        args = (message.topic, json.loads(message.payload))
+
+        # If required, retain the most recent message
+        if nominal_topic in self._subscription_retained_message:
+            self._subscription_retained_message[nominal_topic] = args
+
         # Run all callbacks associated with the nominal topic. Copy taken in
         # case a callback results in (un)subscription.
         for callback in list(self._subscriptions.get(nominal_topic, [])):
             try:
                 self._loop.create_task(self._call_func_or_coro(
-                    callback,
-                    message.topic,
-                    json.loads(message.payload)))
+                    callback, *args))
             except:
                 traceback.print_exc()
 
@@ -240,7 +250,7 @@ class Client(object):
         self._subscribe_mid_to_future[mid] = future
         await future
 
-    async def subscribe(self, topic, callback):
+    async def subscribe(self, topic, callback, retain_all=False):
         """Coroutine which subscribes to a MQTT topic (with QoS 2) and
         registers a callback for message arrival on that topic. Returns once
         the subscription has been confirmed.
@@ -248,12 +258,8 @@ class Client(object):
         If the client reconnects, the subscription will be automatically
         renewed.
 
-        Many callbacks may be associated with the same topic pattern however
-        only one subscription with the MQTT server will be established. This
-        means that only the first subscription will receive an immediate
-        message report due to a retained message. Unfortunately since there is
-        no way for an MQTT client to determine if a message had the
-        ``retained`` flag set, it is not possible to work around this.
+        Many callbacks may be associated with the same topic pattern. See the
+        description of the ``retain_all`` flag.
 
         Parameters
         ----------
@@ -263,6 +269,21 @@ class Client(object):
             A callback function or coroutine to call when a message matching
             this subscription is received. The function will be called with a
             two arguments: the topic and the deserialised payload.
+        retain_all : bool
+            If True, treat all received messages on this topic as retained.
+            Future subscriptions to the same topic will always immediately
+            receive a copy of the most recent message matching the
+            subscription.
+
+            If False, only the first subscription to a given topic will receive
+            the server-retained message, if any. Future subscriptions to the
+            same topic will only receive subsequent messages.
+
+            This option is a work-around for MQTT not exposing when a received
+            message was sent with the retain flag.
+
+            All subscribers to a particular topic must set this argument to the
+            same value.
         """
         new_subscription = topic not in self._subscriptions
 
@@ -276,7 +297,18 @@ class Client(object):
         # Register the user-supplied callback
         self._subscriptions[topic].append(callback)
 
-        # If required and currently connected, subscribe
+        # If retain_all, create a relevant entry
+        if retain_all and topic not in self._subscription_retained_message:
+            self._subscription_retained_message[topic] = None
+
+        # 'Receive' any locally retained messages for topics with retain_all
+        # set.
+        retained_message = self._subscription_retained_message.get(topic, None)
+        if retained_message is not None:
+            self._loop.create_task(self._call_func_or_coro(
+                callback, *retained_message))
+
+        # If not already subscribed and currently connected, subscribe
         if new_subscription:
             try:
                 await self._subscribe(topic)
@@ -314,8 +346,10 @@ class Client(object):
 
         # Unsubscribe completely if no more callbacks are associated.
         if not callbacks:
-            # Remove the callback topic and MQTT client callback
+            # Remove the callback, any retained message and the MQTT client
+            # callback
             del self._subscriptions[topic]
+            self._subscription_retained_message.pop(topic, None)
             self._mqtt.message_callback_remove(topic)
 
             # Unregister with the broker
@@ -509,7 +543,7 @@ class Client(object):
             This function or coroutine is called with the topic and
             deserialised value of the property when the property value is set.
         """
-        await self.subscribe(topic, callback)
+        await self.subscribe(topic, callback, retain_all=True)
 
     async def unwatch_property(self, topic, callback):
         """Convenience function. Stop watching a particular Qth property."""

@@ -243,7 +243,7 @@ async def test_property_watcher(client, event_loop):
     on_property = Mock(side_effect=lambda *_: on_property_evt.set())
     await client.watch_property("test/property", on_property)
     property.value = "bam!"
-    await asyncio.wait_for(on_property_evt.wait(), 0.5, loop=event_loop)
+    await asyncio.sleep(0.1, loop=event_loop)
     assert on_property.mock_calls[-1][1][1] == "bam!"
     await client.unwatch_property("test/property", on_property)
 
@@ -261,3 +261,22 @@ async def test_property_watcher(client, event_loop):
     await asyncio.sleep(0.1, loop=event_loop)
     assert property.value == "bam!"
     assert another_property.value == "bam!"
+
+
+@pytest.mark.asyncio
+async def test_retain_all(client, event_loop):
+    # Ensure the subscription 'retain-all' mode allows multiple subscriptions
+    # to a single property to work.
+
+    await client.set_property("test/property", "foo")
+
+    # Subscribe to that property and make sure it arrives
+    on_property_evt = asyncio.Event(loop=event_loop)
+    on_property = Mock(side_effect=lambda *_: on_property_evt.set())
+    await client.watch_property("test/property", on_property)
+    await asyncio.wait_for(on_property_evt.wait(), 5.0, loop=event_loop)
+    assert on_property.mock_calls[-1][1][1] == "foo"
+
+    # Simultaneously subscribe to the same property and make sure it arrives
+    property = await client.get_property("test/property")
+    assert property.value == "foo"
