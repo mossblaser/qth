@@ -494,20 +494,10 @@ class Client(object):
 
         Blocks until the property value is known.
 
-        .. warning::
-
-            Due to a limitation of the MQTT protocol, if the same property is
-            watched multiple times by the same client, only the first watcher
-            will receive a value immediately. Others will only receive values
-            set after watching.
-
-            This means that the property is already being watched this method
-            will block until the property is next watched.
-
         Parameters
         ----------
         topic : str
-            The topic of the event.
+            The topic of the property. Must not be a wildcard!
         Returns
         -------
         PropertyWatcher
@@ -528,17 +518,10 @@ class Client(object):
         """Convenience function which calls a callback whenever a Qth property
         is set.
 
-        .. warning::
-
-            Due to a limitation of the MQTT protocol, if the same property is
-            watched multiple times by the same client, only the first watcher
-            will receive a value immediately. Others will only receive values
-            set after watching.
-
         Parameters
         ----------
         topic : str
-            The topic of the event.
+            The topic of the property. Must not be a wildcard!
         callback : function or coroutine
             This function or coroutine is called with the topic and
             deserialised value of the property when the property value is set.
