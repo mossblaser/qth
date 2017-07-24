@@ -1,19 +1,16 @@
 Qth: A home automation focused layer on MQTT
 ============================================
 
-Qth is a spiritual successor to [SHET (SHET Home Event
+Qth is a set of conventions for using [MQTT (Message Queue Telemetry
+Transport)](http://mqtt.org/) as the backbone of a home automation system.
+These conventions were inspired by [SHET (SHET Home Event
 Tunnelling)](https://github.com/18sg/shet), the asynchronous communication
 framework used by the hacked-together home automation system in [my old student
 house](http://18sg.github.io/).
 
-Qth is a set of conventions for using [MQTT (Message Queue Telemetry
-Transport)](http://mqtt.org/) which forms the basis of communication between
-parts of my ongoing home automation project. This repository contains a Python
-implementation of these conventions and serves as a reference implementation of
-sorts.
+This repository contains a specification of these conventions and a Python
+'reference' implementation.
 
-Though anybody is free to use Qth, it currently is being developed solely for
-my own use and entertainment.
 
 
 Why does this exist?
@@ -234,3 +231,8 @@ The Name
 Qth is an acronym for 'QB Than's House' where 'Than' is pronounced as in
 'jonaTHAN' (my name) and Qb is pronounced 'Cube-ie', my wife's nickname. Qth is
 pronounced 'cue-th'.
+
+Disclaimer
+----------
+Though anyone is free to use it under the understanding that Qth is presently
+being developed solely for my own enjoyment.
