@@ -1,3 +1,8 @@
+"""
+A reference implementation of the Qth home-automation oriented conventions for
+MQTT.
+"""
+
 import asyncio
 import functools
 import json
@@ -6,88 +11,18 @@ import traceback
 
 import aiomqtt
 
+from .version import __version__  # noqa
 
-class MQTTError(Exception):
-
-    def __init__(self, code):
-        self.code = code
-
-    def __str__(self):
-        return "MQTTError {}: {}".format(self.code,
-                                         aiomqtt.error_string(self.code))
-
-
-class FunctionError(Exception):
-    pass
-
-
-class FunctionTimeoutError(Exception):
-    pass
-
-
-class PropertyWatcher(object):
-    """A utility class which allows convenient access to the most recent value
-    of a Qth property.
-    """
-
-    def __init__(self, client, topic):
-        """Using the supplied client, watch the supplied property."""
-        self._client = client
-        self._topic = topic
-
-        # The most recently received value
-        self._value = None
-
-        loop = self._client._loop
-
-        self._has_been_set = asyncio.Event(loop=loop)
-        loop.create_task(self._client.watch_property(topic, self))
-
-    def __call__(self, topic, new_value):
-        """Internal use only. The callback when the property value is
-        updated.
-        """
-        self._value = new_value
-        self._has_been_set.set()
-
-    @property
-    def value(self):
-        """The most recently received property value. If no value has yet been
-        received, this value will be None.
-
-        Calling `PropertyWatcher.wait` will wait until this property has a
-        valid value.
-        """
-        return self._value
-
-    @value.setter
-    def value(self, new_value):
-        """Try and set the value, at some point in the future.
-
-        .. warning::
-            If setting the property fails for any reason, there is no way to
-            discover this when using this API. Consider using the
-            `Client.set_property` instead.
-        """
-        self._client._loop.create_task(self._client.set_property(
-            self._topic,
-            new_value))
-
-    async def wait(self):
-        """Wait until the value of the property is known."""
-        await self._has_been_set.wait()
-
-    async def close(self):
-        """Permanently stop watching the property, invalidating the value of
-        this object.
-        """
-        await self._client.unwatch_property(self._topic, self)
+EVENT_ONE_TO_MANY = "EVENT-1:N"
+EVENT_MANY_TO_ONE = "EVENT-N:1"
+PROPERTY_ONE_TO_MANY = "PROPERTY-1:N"
+PROPERTY_MANY_TO_ONE = "PROPERTY-N:1"
 
 
 class Client(object):
     """A Qth-compliant MQTT client."""
 
-    def __init__(self, client_id, loop=None,
+    def __init__(self, client_id, description=None, loop=None,
                  host="localhost", port=1883, keepalive=10):
         """Connect to an MQTT server.
 
@@ -95,6 +30,9 @@ class Client(object):
         ----------
         client_id : str
             A unique identifier for this client. (Required)
+        description : str
+            A human-readable description of the client. Defaults to being
+            empty.
         loop : asyncio.AbstractEventLoop
             The asyncio event loop to run in. If omitted or None, uses the
             default loop.
@@ -106,6 +44,7 @@ class Client(object):
             Number of seconds between pings to the MQTT server.
         """
         self._client_id = client_id
+        self._description = description
         self._loop = loop or asyncio.get_event_loop()
 
         # Lookup from MID to future to return upon arrival of that MID.
@@ -211,29 +150,144 @@ class Client(object):
             except:
                 traceback.print_exc()
 
-    async def close(self):
-        """Permanently close the connection to the MQTT server."""
-        try:
-            # Indicate disconnection to registration server. If this fails
-            # it'll be sorted out by the will.
-            await self._publish("meta/clients/{}".format(self._client_id),
-                                None, retain=False)
+    async def register(self, path, behaviour, description):
+        """Coroutine. Register a path with the Qth registration system.
 
-            # Actually disconnect
-            self._mqtt.disconnect()
-            await self._disconnected_event.wait()
-        except MQTTError as e:
-            if e.code != aiomqtt.MQTT_ERR_NO_CONN:
-                raise
-        finally:
-            # Stop the event loop thread
-            await self._mqtt.loop_stop()
-
-    async def ensure_connected(self):
-        """Block until the client has connected to the MQTT server and all
-        registration and subscription commands have completed.
+        Parameters
+        ----------
+        path : string
+            The topic path for the endpoint being registered.
+        behaviour : string
+            The qth behaviour name which describes how this endpoint will be
+            used.
+        description : string
+            A human-readable string describing the purpose or higher-level
+            behaviour of the endpoint.
         """
-        await self._connected_event.wait()
+        self._registration[path] = {
+            "behaviour": behaviour,
+            "description": description
+        }
+
+        try:
+            await self.publish_registration()
+        except MQTTError:
+            pass
+
+    async def unregister(self, path):
+        """Coroutine. Unregister a path with the Qth registration system.
+
+        Parameters
+        ----------
+        path : string
+            The path to unregister.
+        """
+        self._registration.pop(path, None)
+
+        try:
+            await self.publish_registration()
+        except MQTTError:
+            pass
+
+    async def send_event(self, topic, value=None):
+        """Coroutine. Sends a Qth event.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        value : JSON-serialiseable
+            (Optional) JSON-serialiseable value to send with the event.
+        """
+        await self.publish(topic, value)
+
+    async def watch_event(self, topic, callback):
+        """Coroutine. Calls a callback whenever a Qth event occurs.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the event.
+        callback : function or coroutine
+            This function or coroutine is called with the event topic and
+            deserialised value of the event when the event occurs.
+        """
+        await self.subscribe(topic, callback)
+
+    async def unwatch_event(self, topic, callback):
+        """Coroutine. Stop watching a particular Qth event."""
+        await self.unsubscribe(topic, callback)
+
+    async def set_property(self, topic, value):
+        """Coroutine which sets the value of a Qth property.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the property.
+        value : JSON-serialiseable
+            JSON-serialiseable value to set the property to.
+        """
+        await self.publish(topic, value, retain=True)
+
+    async def get_property(self, topic):
+        """Coroutine which returns a `PropertyWatcher` object.
+
+        Blocks until the property value is known.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the property. Must not be a wildcard!
+
+        Returns
+        -------
+        :py:class:`PropertyWatcher`
+            An interface to the current property value. The ``value`` field
+            will be updated with the most recent value of the property. Setting
+            the ``value`` will cause the property to be written
+
+            When you're finished with it either call
+            `PropertyWatcher.close` or ``Client.unwatch_property(topic, p)``
+            where ``topic`` is the topic of the property and ``p`` is the
+            `PropertyWatcher`.
+        """
+        p = PropertyWatcher(self, topic)
+        await p.wait()
+        return p
+
+    async def watch_property(self, topic, callback):
+        """Coroutine which calls a callback whenever a Qth property is set.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the property. Must not be a wildcard!
+        callback : function or coroutine
+            This function or coroutine is called with the topic and
+            deserialised value of the property when the property value is set.
+        """
+        await self.subscribe(topic, callback, retain_all=True)
+
+    async def unwatch_property(self, topic, callback):
+        """Coroutine. Stop watching a particular Qth property."""
+        await self.unsubscribe(topic, callback)
+
+    async def publish_registration(self):
+        """Coroutine. For advanced users only. Publish the Qth client
+        registration message, if connected.
+
+        This method is called automatically upon (re)connection and when the
+        registration is changed. It is unlikely you'll need to call this by
+        hand.
+        """
+        await self._publish(
+            "meta/clients/{}".format(self._client_id),
+            {
+                "description": self._description,
+                "topics": self._registration,
+            },
+            retain=True)
 
     async def _subscribe(self, topic):
         """(Internal use only.) Subscribe to a (set of) topic(s) and wait until
@@ -251,9 +305,9 @@ class Client(object):
         await future
 
     async def subscribe(self, topic, callback, retain_all=False):
-        """Coroutine which subscribes to a MQTT topic (with QoS 2) and
-        registers a callback for message arrival on that topic. Returns once
-        the subscription has been confirmed.
+        """For advanced users only. Coroutine which subscribes to a MQTT topic
+        (with QoS 2) and registers a callback for message arrival on that
+        topic. Returns once the subscription has been confirmed.
 
         If the client reconnects, the subscription will be automatically
         renewed.
@@ -332,7 +386,7 @@ class Client(object):
         await future
 
     async def unsubscribe(self, topic, callback):
-        """Unsubscribe from a topic.
+        """Coroutine. For advanced users only. Unsubscribe from a topic.
 
         Parameters
         ----------
@@ -376,8 +430,8 @@ class Client(object):
         await future
 
     async def publish(self, topic, payload, retain=False):
-        """Publish a message with QoS 2, waiting until connected and the
-        publication has been acknowledged.
+        """Coroutine. For advanced users only. Publish a message with QoS 2,
+        waiting until connected and the publication has been acknowledged.
 
         Parameters
         ----------
@@ -397,137 +451,99 @@ class Client(object):
                 if e.code != aiomqtt.MQTT_ERR_NO_CONN:
                     raise
 
-    async def publish_registration(self):
-        """Publish the Qth client registration message, if connected.
-
-        This method is called automatically upon (re)connection and when the
-        registration is changed. It is unlikely you'll need to call this by
-        hand.
+    async def ensure_connected(self):
+        """For advanced users only (most commands call this internally).
+        Coroutine. Block until the client has connected to the MQTT server and
+        all registration and subscription commands have completed.
         """
-        await self._publish("meta/clients/{}".format(self._client_id),
-                            self._registration,
-                            retain=True)
+        await self._connected_event.wait()
 
-    async def register(self, path, behaviour, description):
-        """Register a path with the Qth registration system.
-
-        Parameters
-        ----------
-        path : string
-            The topic path for the endpoint being registered.
-        behaviour : string
-            The qth behaviour name which describes how this endpoint will be
-            used.
-        description : string
-            A human-readable string describing the purpose or higher-level
-            behaviour of the endpoint.
-        """
-        self._registration[path] = {
-            "behaviour": behaviour,
-            "description": description
-        }
-
+    async def close(self):
+        """Coroutine. Permanently close the connection to the MQTT server."""
         try:
-            await self.publish_registration()
-        except MQTTError:
-            pass
+            # Indicate disconnection to registration server. If this fails
+            # it'll be sorted out by the will.
+            await self._publish("meta/clients/{}".format(self._client_id),
+                                None, retain=False)
 
-    async def unregister(self, path):
-        """Unregister a path with the Qth registration system.
+            # Actually disconnect
+            self._mqtt.disconnect()
+            await self._disconnected_event.wait()
+        except MQTTError as e:
+            if e.code != aiomqtt.MQTT_ERR_NO_CONN:
+                raise
+        finally:
+            # Stop the event loop thread
+            await self._mqtt.loop_stop()
 
-        Parameters
-        ----------
-        path : string
-            The path to unregister.
+
+class MQTTError(Exception):
+    """Thrown when an MQTT-related error occurs. Has a 'code' member variable
+    indicating the Paho-MQTT error code.
+    """
+
+    def __init__(self, code):
+        self.code = code
+
+    def __str__(self):
+        return "MQTTError {}: {}".format(self.code,
+                                         aiomqtt.error_string(self.code))
+
+
+class PropertyWatcher(object):
+    """A utility class which allows convenient access to the most recent value
+    of a Qth property. Create using :py:meth:`Client.get_property`.
+    """
+
+    def __init__(self, client, topic):
+        """Using the supplied client, watch the supplied property."""
+        self._client = client
+        self._topic = topic
+
+        # The most recently received value
+        self._value = None
+
+        loop = self._client._loop
+
+        self._has_been_set = asyncio.Event(loop=loop)
+        loop.create_task(self._client.watch_property(topic, self))
+
+    def __call__(self, topic, new_value):
+        """Internal use only. The callback when the property value is
+        updated.
         """
-        self._registration.pop(path, None)
+        self._value = new_value
+        self._has_been_set.set()
 
-        try:
-            await self.publish_registration()
-        except MQTTError:
-            pass
+    @property
+    def value(self):
+        """The most recently received property value. If no value has yet been
+        received, this value will be None.
 
-    async def send_event(self, topic, value=None):
-        """Convenience function which sends a Qth event.
-
-        Parameters
-        ----------
-        topic : str
-            The topic of the event.
-        value : JSON-serialiseable
-            (Optional) JSON-serialiseable value to send with the event.
+        Calling `PropertyWatcher.wait` will wait until this property has a
+        valid value.
         """
-        await self.publish(topic, value)
+        return self._value
 
-    async def watch_event(self, topic, callback):
-        """Convenience function which calls a callback whenever a Qth event
-        occurs.
+    @value.setter
+    def value(self, new_value):
+        """Try and set the value, at some point in the future.
 
-        Parameters
-        ----------
-        topic : str
-            The topic of the event.
-        callback : function or coroutine
-            This function or coroutine is called with the event topic and
-            deserialised value of the event when the event occurs.
+        .. warning::
+            If setting the property fails for any reason, there is no way to
+            discover this when using this API. Consider using the
+            `Client.set_property` instead.
         """
-        await self.subscribe(topic, callback)
+        self._client._loop.create_task(self._client.set_property(
+            self._topic,
+            new_value))
 
-    async def unwatch_event(self, topic, callback):
-        """Convenience function. Stop watching a particular Qth event."""
-        await self.unsubscribe(topic, callback)
+    async def wait(self):
+        """Wait until the value of the property is known."""
+        await self._has_been_set.wait()
 
-    async def set_property(self, topic, value):
-        """Convenience function which sets the value of a Qth property.
-
-        Parameters
-        ----------
-        topic : str
-            The topic of the property.
-        value : JSON-serialiseable
-            JSON-serialiseable value to set the property to.
+    async def close(self):
+        """Permanently stop watching the property, invalidating the value of
+        this object.
         """
-        await self.publish(topic, value, retain=True)
-
-    async def get_property(self, topic):
-        """Convenience function which returns a `PropertyWatcher` object.
-
-        Blocks until the property value is known.
-
-        Parameters
-        ----------
-        topic : str
-            The topic of the property. Must not be a wildcard!
-        Returns
-        -------
-        PropertyWatcher
-            An interface to the current property value. The ``value`` field
-            will be updated with the most recent value of the property. Setting
-            the ``value`` will cause the property to be written
-
-            When you're finished with it either call
-            `PropertyWatcher.close` or ``Client.unwatch_property(topic, p)``
-            where ``topic`` is the topic of the property and ``p`` is the
-            `PropertyWatcher`.
-        """
-        p = PropertyWatcher(self, topic)
-        await p.wait()
-        return p
-
-    async def watch_property(self, topic, callback):
-        """Convenience function which calls a callback whenever a Qth property
-        is set.
-
-        Parameters
-        ----------
-        topic : str
-            The topic of the property. Must not be a wildcard!
-        callback : function or coroutine
-            This function or coroutine is called with the topic and
-            deserialised value of the property when the property value is set.
-        """
-        await self.subscribe(topic, callback, retain_all=True)
-
-    async def unwatch_property(self, topic, callback):
-        """Convenience function. Stop watching a particular Qth property."""
-        await self.unsubscribe(topic, callback)
+        await self._client.unwatch_property(self._topic, self)

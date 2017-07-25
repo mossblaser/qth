@@ -134,7 +134,8 @@ async def test_sub_pub_unsub_multiple(client, event_loop):
 @pytest.mark.asyncio
 async def test_register(client, hostname, port, event_loop):
     # Make a client to check the registrations of
-    dut = qth.Client("test-monitor", host=hostname, port=port, loop=event_loop)
+    dut = qth.Client("test-monitor", "A test client.",
+                     host=hostname, port=port, loop=event_loop)
     try:
         # Register some endpoints
         await dut.ensure_connected()
@@ -150,13 +151,16 @@ async def test_register(client, hostname, port, event_loop):
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
         assert sub.mock_calls[-1][1][1] == {
-            "test/someepehm": {
-                "behaviour": "ephemeral",
-                "description": "An example...",
-            },
-            "test/somesensor": {
-                "behaviour": "sensor",
-                "description": "Another example...",
+            "description": "A test client.",
+            "topics": {
+                "test/someepehm": {
+                    "behaviour": "ephemeral",
+                    "description": "An example...",
+                },
+                "test/somesensor": {
+                    "behaviour": "sensor",
+                    "description": "Another example...",
+                },
             },
         }
 
@@ -166,10 +170,13 @@ async def test_register(client, hostname, port, event_loop):
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
         assert sub.mock_calls[-1][1][1] == {
-            "test/somesensor": {
-                "behaviour": "sensor",
-                "description": "Another example...",
-            },
+            "description": "A test client.",
+            "topics": {
+                "test/somesensor": {
+                    "behaviour": "sensor",
+                    "description": "Another example...",
+                },
+            }
         }
 
         # Make sure everything goes away when the client disconnects
