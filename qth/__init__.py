@@ -13,11 +13,6 @@ import aiomqtt
 
 from .version import __version__  # noqa
 
-EVENT_ONE_TO_MANY = "EVENT-1:N"
-EVENT_MANY_TO_ONE = "EVENT-N:1"
-PROPERTY_ONE_TO_MANY = "PROPERTY-1:N"
-PROPERTY_MANY_TO_ONE = "PROPERTY-N:1"
-
 
 class Client(object):
     """A Qth-compliant MQTT client."""
@@ -475,6 +470,23 @@ class Client(object):
         finally:
             # Stop the event loop thread
             await self._mqtt.loop_stop()
+
+
+EVENT_ONE_TO_MANY = "EVENT-1:N"
+"""Behaviour name for One-to-Many Events."""
+
+EVENT_MANY_TO_ONE = "EVENT-N:1"
+"""Behaviour name for Many-to-One Events."""
+
+PROPERTY_ONE_TO_MANY = "PROPERTY-1:N"
+"""Behaviour name for One-to-Many Properties."""
+
+PROPERTY_MANY_TO_ONE = "PROPERTY-N:1"
+"""Behaviour name for Many-to-One Properties."""
+
+DIRECTORY = "DIRECTORY"
+"""Behaviour used for directory entries in a Qth registry's directory listing.
+Not to be used by regular clients."""
 
 
 class MQTTError(Exception):
