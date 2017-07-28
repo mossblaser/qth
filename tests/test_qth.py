@@ -2,8 +2,6 @@ import pytest
 
 from mock import Mock
 
-import random
-
 import asyncio
 import qth
 
@@ -55,7 +53,7 @@ async def test_uniqueified_id(client, event_loop):
     # Should have something appended to the supplied client ID
     assert client.client_id.startswith("test-client-")
     assert len(client.client_id) > len("test-client-")
-    
+
     # The test_register test further below tests that uniqification of IDs can
     # be disabled.
 
@@ -153,7 +151,7 @@ async def test_sub_pub_unsub_multiple(client, event_loop):
 async def test_register(client, hostname, port, event_loop):
     # NB: as a side effect, this test also tests the make_client_id_unique
     # option can be overridden.
-    
+
     # Make a client to check the registrations of
     dut = qth.Client("test-monitor", "A test client.",
                      make_client_id_unique=False,

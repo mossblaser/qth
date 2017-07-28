@@ -39,7 +39,8 @@ class Client(object):
             The asyncio event loop to run in. If omitted or None, uses the
             default loop.
         make_client_id_unique : bool
-            If set to False, don't add a unique, random suffix to the client_id.
+            If set to False, don't add a unique, random suffix to the
+            client_id.
         host : str
             The hostname of the MQTT server.
         port : int
@@ -508,7 +509,7 @@ class Client(object):
         finally:
             # Stop the event loop thread
             await self._mqtt.loop_stop()
-    
+
     @property
     def client_id(self):
         """This client's Qth client ID."""
