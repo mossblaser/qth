@@ -68,6 +68,14 @@ async def test_sub_pub_unsub(client, event_loop):
     await asyncio.wait_for(on_message_evt.wait(), 5.0, loop=event_loop)
     on_message.assert_called_once_with("test/foo", {"hello": "world"})
 
+    # Check that publishing an Empty message works
+    on_message_evt.clear()
+    on_message.reset_mock()
+    assert not on_message_evt.is_set()
+    await client.publish("test/foo", qth.Empty)
+    await asyncio.wait_for(on_message_evt.wait(), 5.0, loop=event_loop)
+    on_message.assert_called_once_with("test/foo", qth.Empty)
+
     # Unsubscribe and check we don't get a message
     on_message.reset_mock()
     on_message_evt.clear()
@@ -184,7 +192,16 @@ async def test_register(client, hostname, port, event_loop):
         await dut.close()
         await asyncio.wait_for(sub_evt.wait(), 0.5, loop=event_loop)
         assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
-        assert sub.mock_calls[-1][1][1] is None
+        assert sub.mock_calls[-1][1][1] is qth.Empty
+
+        # Make sure nothing is retained afterwards
+        await client.unsubscribe("meta/clients/test-monitor", sub)
+        sub_evt.clear()
+        sub.reset_mock()
+        await client.subscribe("meta/clients/test-monitor", sub)
+        await asyncio.sleep(0.1, loop=event_loop)
+        assert len(sub.mock_calls) == 0
+
     finally:
         await dut.close()
 
@@ -231,6 +248,32 @@ async def test_property(client, event_loop):
     await client.set_property("test/property", "foo")
     await asyncio.sleep(0.1, loop=event_loop)
     assert not on_property_evt.is_set()
+
+
+@pytest.mark.asyncio
+async def test_delete_property(client, event_loop):
+    # Check property values are usually retained
+    await client.set_property("test/deleted-property", {"hello": "world"})
+    on_property_evt = asyncio.Event(loop=event_loop)
+    on_property = Mock(side_effect=lambda *_: on_property_evt.set())
+    await client.watch_property("test/deleted-property", on_property)
+    await asyncio.wait_for(on_property_evt.wait(), 0.5, loop=event_loop)
+    assert on_property.mock_calls[-1][1][1] == {"hello": "world"}
+
+    # Check deleting the property removes it
+    on_property_evt.clear()
+    on_property.reset_mock()
+    await client.delete_property("test/deleted-property")
+    await asyncio.wait_for(on_property_evt.wait(), 0.5, loop=event_loop)
+    assert on_property.mock_calls[-1][1][1] is qth.Empty
+
+    # Check no value is retained
+    on_property_evt.clear()
+    on_property.reset_mock()
+    await client.unwatch_property("test/deleted-property", on_property)
+    await client.watch_property("test/deleted-property", on_property)
+    await asyncio.sleep(0.1, loop=event_loop)
+    assert len(on_property.mock_calls) == 0
 
 
 @pytest.mark.asyncio

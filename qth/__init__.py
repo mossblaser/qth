@@ -8,6 +8,7 @@ import functools
 import json
 import inspect
 import traceback
+import sentinel
 
 import aiomqtt
 
@@ -72,7 +73,7 @@ class Client(object):
 
         # Clear the registration when we disconnect ungracefully.
         self._mqtt.will_set("meta/clients/{}".format(self._client_id),
-                            "null", qos=2, retain=False)
+                            None, qos=2, retain=True)
 
         self._mqtt.on_connect = self._on_connect
         self._mqtt.on_disconnect = self._on_disconnect
@@ -130,7 +131,12 @@ class Client(object):
             future.set_result(None)
 
     def _on_message(self, nominal_topic, _mqtt, _userdata, message):
-        args = (message.topic, json.loads(message.payload))
+        topic = message.topic
+        if message.payload is None or message.payload == b"":
+            payload = Empty
+        else:
+            payload = json.loads(message.payload)
+        args = (topic, payload)
 
         # If required, retain the most recent message
         if nominal_topic in self._subscription_retained_message:
@@ -267,6 +273,17 @@ class Client(object):
     async def unwatch_property(self, topic, callback):
         """Coroutine. Stop watching a particular Qth property."""
         await self.unsubscribe(topic, callback)
+
+    async def delete_property(self, topic):
+        """Coroutine which deletes a Qth property. Watchers will receive a
+        final value of ``qth.Empty``.
+
+        Parameters
+        ----------
+        topic : str
+            The topic of the property to delete.
+        """
+        await self.set_property(topic, Empty)
 
     async def publish_registration(self):
         """Coroutine. For advanced users only. Publish the Qth client
@@ -415,7 +432,11 @@ class Client(object):
         publication has been acknowledged.
         """
         mid = None
-        result, mid = self._mqtt.publish(topic, json.dumps(payload), 2, retain)
+        if payload is Empty:
+            payload = None
+        else:
+            payload = json.dumps(payload)
+        result, mid = self._mqtt.publish(topic, payload, 2, retain)
         if result != aiomqtt.MQTT_ERR_SUCCESS:
             raise MQTTError(result)
 
@@ -432,8 +453,9 @@ class Client(object):
         ----------
         topic : str
             The topic to publish to
-        payload : JSON-serialiseable value
-            The payload of the message
+        payload : JSON-serialiseable value or ``qth.Empty``
+            The payload of the message. Will be sent seriallised as JSON or if
+            ``qth.Empty`` is passed, will be a completely empty MQTT message.
         retain : bool
             Should the message be retained by the MQTT server?
         """
@@ -459,7 +481,7 @@ class Client(object):
             # Indicate disconnection to registration server. If this fails
             # it'll be sorted out by the will.
             await self._publish("meta/clients/{}".format(self._client_id),
-                                None, retain=False)
+                                Empty, retain=True)
 
             # Actually disconnect
             self._mqtt.disconnect()
@@ -471,6 +493,9 @@ class Client(object):
             # Stop the event loop thread
             await self._mqtt.loop_stop()
 
+
+Empty = sentinel.create("Empty")
+"""Payload value to send to generate a genuinely empty MQTT message."""
 
 EVENT_ONE_TO_MANY = "EVENT-1:N"
 """Behaviour name for One-to-Many Events."""
@@ -513,7 +538,7 @@ class PropertyWatcher(object):
         self._topic = topic
 
         # The most recently received value
-        self._value = None
+        self._value = Empty
 
         loop = self._client._loop
 
@@ -530,7 +555,7 @@ class PropertyWatcher(object):
     @property
     def value(self):
         """The most recently received property value. If no value has yet been
-        received, this value will be None.
+        received, this value will be ``qth.Empty``.
 
         Calling `PropertyWatcher.wait` will wait until this property has a
         valid value.
