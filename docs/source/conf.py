@@ -16,6 +16,9 @@
 # Autodoc should list members in the same order as the source code.
 autodoc_member_order = "bysource"
 
+# Include constructor docstring
+autoclass_content = 'init'
+
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
