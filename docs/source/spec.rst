@@ -94,9 +94,9 @@ Here, the 'behaviour' value must be one of:
 * `"PROPERTY-1:N"` For One-to-Many Properties.
 * `"PROPERTY-N:1"` For Many-to-One Properties.
 
-Upon client disconnection, the client must publish a QoS 2, non-retained
-``null`` message to ``meta/clients/<CLIENT-ID>`` to clear their registration.
-This message should be set as the client's MQTT will.
+Upon client disconnection, the client must publish a QoS 2, retained empty
+message to ``meta/clients/<CLIENT-ID>`` to clear their registration.  This
+message should be set as the client's MQTT will.
 
 
 Registration server
