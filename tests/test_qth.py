@@ -41,13 +41,23 @@ def server(event_loop, port):
 
 @pytest.fixture
 async def client(server, hostname, port, event_loop):
-    c = qth.Client("test-client-{}".format(random.random()),
+    c = qth.Client("test-client",
                    host=hostname, port=port,
                    loop=event_loop)
     try:
         yield c
     finally:
         await c.close()
+
+
+@pytest.mark.asyncio
+async def test_uniqueified_id(client, event_loop):
+    # Should have something appended to the supplied client ID
+    assert client.client_id.startswith("test-client-")
+    assert len(client.client_id) > len("test-client-")
+    
+    # The test_register test further below tests that uniqification of IDs can
+    # be disabled.
 
 
 @pytest.mark.asyncio
@@ -141,8 +151,12 @@ async def test_sub_pub_unsub_multiple(client, event_loop):
 
 @pytest.mark.asyncio
 async def test_register(client, hostname, port, event_loop):
+    # NB: as a side effect, this test also tests the make_client_id_unique
+    # option can be overridden.
+    
     # Make a client to check the registrations of
     dut = qth.Client("test-monitor", "A test client.",
+                     make_client_id_unique=False,
                      host=hostname, port=port, loop=event_loop)
     try:
         # Register some endpoints

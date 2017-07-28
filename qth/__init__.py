@@ -9,6 +9,8 @@ import json
 import inspect
 import traceback
 import sentinel
+import random
+import string
 
 import aiomqtt
 
@@ -19,19 +21,25 @@ class Client(object):
     """A Qth-compliant MQTT client."""
 
     def __init__(self, client_id, description=None, loop=None,
+                 make_client_id_unique=True,
                  host="localhost", port=1883, keepalive=10):
         """Connect to an MQTT server.
 
         Parameters
         ----------
         client_id : str
-            A unique identifier for this client. (Required)
+            A unique identifier for this client. (Required) Will be prepended
+            with a randomly generated suffix to avoid collisions when several
+            instances of the same client are created. Set make_client_id_unique
+            to False to disable this behaviour.
         description : str
             A human-readable description of the client. Defaults to being
             empty.
         loop : asyncio.AbstractEventLoop
             The asyncio event loop to run in. If omitted or None, uses the
             default loop.
+        make_client_id_unique : bool
+            If set to False, don't add a unique, random suffix to the client_id.
         host : str
             The hostname of the MQTT server.
         port : int
@@ -39,7 +47,15 @@ class Client(object):
         keepalive : float
             Number of seconds between pings to the MQTT server.
         """
-        self._client_id = client_id
+        if make_client_id_unique:
+            # Add a random suffix to the client ID by default to avoid
+            # collisions
+            self._client_id = "{}-{}".format(
+                client_id,
+                "".join(random.choices(string.hexdigits, k=8)).upper())
+        else:
+            self._client_id = client_id
+
         self._description = description
         self._loop = loop or asyncio.get_event_loop()
 
@@ -492,6 +508,11 @@ class Client(object):
         finally:
             # Stop the event loop thread
             await self._mqtt.loop_stop()
+    
+    @property
+    def client_id(self):
+        """This client's Qth client ID."""
+        return self._client_id
 
 
 Empty = sentinel.create("Empty")
