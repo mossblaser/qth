@@ -50,9 +50,9 @@ properties for which they are the 'one' side of. For example, a Many-to-One
 Event should be registered by the subscriber while a One-to-Many event should
 be registered by the publisher.
 
-A registration server collates the information published by each client to
-produce a hierarchy of One-to-Many Properties which enumerate the complete
-hierarchy of MQTT topics.
+A Qth Reigstrar collates the information published by each client to produce a
+hierarchy of One-to-Many Properties which enumerate the complete hierarchy of
+MQTT topics.
 
 Client Registration
 ```````````````````
@@ -84,27 +84,54 @@ form:
 
     {
         "behaviour": <TOPIC BEHAVIOUR>,
-        "description": "<HUMAN-READABLE DESCRIPTION OF TOPIC>"
+        "description": "<HUMAN-READABLE DESCRIPTION OF TOPIC>",
+        "on_unregister": <ACTION>,
+        "delete_on_unregister": <BOOLEAN>
     }
 
 Here, the 'behaviour' value must be one of:
 
-* `"EVENT-1:N"` For One-to-Many Events.
-* `"EVENT-N:1"` For Many-to-One Events.
-* `"PROPERTY-1:N"` For One-to-Many Properties.
-* `"PROPERTY-N:1"` For Many-to-One Properties.
+* ``"EVENT-1:N"`` For One-to-Many Events.
+* ``"EVENT-N:1"`` For Many-to-One Events.
+* ``"PROPERTY-1:N"`` For One-to-Many Properties.
+* ``"PROPERTY-N:1"`` For Many-to-One Properties.
+
+The ``on_unregister`` and ``delete_on_unregister`` entries are optional and may
+be omitted. Their behaviour is described in the next section.
+
+
+Client Unregistration
+`````````````````````
 
 Upon client disconnection, the client must publish a QoS 2, retained empty
-message to ``meta/clients/<CLIENT-ID>`` to clear their registration.  This
-message should be set as the client's MQTT will.
+message (not just JSON ``null``) to ``meta/clients/<CLIENT-ID>`` to clear their
+registration.  This message should be set as the client's MQTT will.
+
+The Qth registrar can use the ``on_unregister`` and ``delete_on_unregister``
+values associated with a topic to help clean up the system or help inform other
+clients about the unavailability of topics.
+
+Topics with an ``on_unregister`` value specified will be set to this value (if
+a property) or sent as a final event (if an event).  This will be sent only
+when the client disconnects but not if the topic is removed from the set of
+registered topics while the client remains connected.
+
+The ``delete_on_unregister`` is boolean whose default value is ``false``. If
+set to ``true``, the associated property will be deleted when the client
+unregisters. If the topic is an event, the behaviour is undefined. As with
+``on_unregister``, if the topic is removed from the topic list this action will
+not take place.
+
+If both ``on_unregister`` and ``delete_on_unregister`` are specified the result
+is unspecified.
 
 
-Registration server
-```````````````````
+The Qth Registrar
+`````````````````
 
-The Qth registration service aggregates messages published into
-``meta/clients/+`` to produce a hierarchy of One-to-Many properties in
-``meta/ls/#`` whose topics end in trailing slashes.
+The Qth registrar aggregates messages published into ``meta/clients/+`` to
+produce a hierarchy of One-to-Many properties in ``meta/ls/#`` whose topics end
+in trailing slashes.
 
 The topic ``meta/ls/`` (note the trailing slash) describes the topics at the
 root of the address space. Likewise ``meta/ls/foo/`` describes the topics in
@@ -117,7 +144,7 @@ Each directory's property contains a JSON object of the following format:
 
     {
         "<TOPIC>": [
-            {"behavior": "...", "description": "...", "client_id": "...", },
+            {"behavior": "...", "description": "...", "client_id": "...", ...},
             ...
         ],
         ...

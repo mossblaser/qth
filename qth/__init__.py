@@ -16,6 +16,7 @@ import aiomqtt
 
 from .version import __version__  # noqa
 
+_NOT_GIVEN = sentinel.create("_NOT_GIVEN")
 
 class Client(object):
     """A Qth-compliant MQTT client."""
@@ -168,7 +169,8 @@ class Client(object):
             except:
                 traceback.print_exc()
 
-    async def register(self, path, behaviour, description):
+    async def register(self, path, behaviour, description,
+                       on_unregister=_NOT_GIVEN, delete_on_unregister=False):
         """Coroutine. Register a path with the Qth registration system.
 
         Parameters
@@ -181,11 +183,24 @@ class Client(object):
         description : string
             A human-readable string describing the purpose or higher-level
             behaviour of the endpoint.
+        on_unsubscribe : JSON-serialisable value
+            If given the on disconnection (either clean or dirty), sets the
+            value of the registered proprety/sends the registered event with
+            the given value.
+        delete_on_unregister : bool
+            If true, deletes the registered property. If set to True for an
+            event, behaviour is undefined. If set at the same time as
+            on_subscribe, behaviour is undefined.
         """
         self._registration[path] = {
             "behaviour": behaviour,
             "description": description
         }
+        
+        if on_unregister is not _NOT_GIVEN:
+            self._registration[path]["on_unregister"] = on_unregister
+        elif delete_on_unregister:
+            self._registration[path]["delete_on_unregister"] = True
 
         try:
             await self.publish_registration()

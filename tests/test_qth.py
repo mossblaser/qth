@@ -159,8 +159,14 @@ async def test_register(client, hostname, port, event_loop):
     try:
         # Register some endpoints
         await dut.ensure_connected()
-        await dut.register("test/someepehm", "ephemeral", "An example...")
-        await dut.register("test/somesensor", "sensor", "Another example...")
+        await dut.register("test/someepehm", qth.EVENT_ONE_TO_MANY,
+                           "An example...")
+        await dut.register("test/anotherephem", qth.EVENT_MANY_TO_ONE,
+                           "A further example...", on_unregister=None)
+        await dut.register("test/somesensor", qth.PROPERTY_ONE_TO_MANY,
+                           "Another example...", on_unregister=123)
+        await dut.register("test/something", qth.PROPERTY_MANY_TO_ONE,
+                           "A final example...", delete_on_unregister=True)
 
         # Subscribe to registration updates
         sub_evt = asyncio.Event(loop=event_loop)
@@ -174,12 +180,23 @@ async def test_register(client, hostname, port, event_loop):
             "description": "A test client.",
             "topics": {
                 "test/someepehm": {
-                    "behaviour": "ephemeral",
+                    "behaviour": "EVENT-1:N",
                     "description": "An example...",
                 },
+                "test/anotherephem": {
+                    "behaviour": "EVENT-N:1",
+                    "description": "A further example...",
+                    "on_unregister": None,
+                },
                 "test/somesensor": {
-                    "behaviour": "sensor",
+                    "behaviour": "PROPERTY-1:N",
                     "description": "Another example...",
+                    "on_unregister": 123,
+                },
+                "test/something": {
+                    "behaviour": "PROPERTY-N:1",
+                    "description": "A final example...",
+                    "delete_on_unregister": True,
                 },
             },
         }
@@ -192,9 +209,20 @@ async def test_register(client, hostname, port, event_loop):
         assert sub.mock_calls[-1][1][1] == {
             "description": "A test client.",
             "topics": {
+                "test/anotherephem": {
+                    "behaviour": "EVENT-N:1",
+                    "description": "A further example...",
+                    "on_unregister": None,
+                },
                 "test/somesensor": {
-                    "behaviour": "sensor",
+                    "behaviour": "PROPERTY-1:N",
                     "description": "Another example...",
+                    "on_unregister": 123,
+                },
+                "test/something": {
+                    "behaviour": "PROPERTY-N:1",
+                    "description": "A final example...",
+                    "delete_on_unregister": True,
                 },
             }
         }
