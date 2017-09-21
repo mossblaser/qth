@@ -3,6 +3,7 @@ A reference implementation of the Qth home-automation oriented conventions for
 MQTT.
 """
 
+import os
 import asyncio
 import functools
 import json
@@ -23,7 +24,7 @@ class Client(object):
 
     def __init__(self, client_id, description=None, loop=None,
                  make_client_id_unique=True,
-                 host="localhost", port=1883, keepalive=10):
+                 host=None, port=None, keepalive=10):
         """Connect to an MQTT server.
 
         Parameters
@@ -43,9 +44,11 @@ class Client(object):
             If set to False, don't add a unique, random suffix to the
             client_id.
         host : str
-            The hostname of the MQTT server.
+            The hostname of the MQTT server. (Defaults to the value of the
+            QTH_HOST environment variable, or if that is not set, localhost).
         port : int
-            The port number of the MQTT server.
+            The port number of the MQTT server. (Defaults to the value of the
+            QTH_PORT environment variable, or if that is not set, 1883).
         keepalive : float
             Number of seconds between pings to the MQTT server.
         """
@@ -100,7 +103,11 @@ class Client(object):
         self._mqtt.on_unsubscribe = self._on_unsubscribe
 
         self._mqtt.loop_start()
-        self._mqtt.connect_async(host, port, keepalive)
+        self._mqtt.connect_async(
+            host or os.environ.get("QTH_HOST", "localhost"),
+            port or int(os.environ.get("QTH_PORT", "1883")),
+            keepalive,
+        )
 
     async def _call_func_or_coro(self, f, *args, **kwargs):
         """Internal use only. Call a function or coroutine and return the
