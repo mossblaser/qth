@@ -247,6 +247,35 @@ async def test_register(client, hostname, port, event_loop):
 
 
 @pytest.mark.asyncio
+async def test_register_merging(client, hostname, port, event_loop):
+    # Make a client to check the registrations of
+    dut = qth.Client("test-monitor", "A test client.",
+                     make_client_id_unique=False,
+                     host=hostname, port=port, loop=event_loop)
+    try:
+        # Subscribe to registration updates
+        sub_evt = asyncio.Event(loop=event_loop)
+        sub = Mock(side_effect=lambda *_: sub_evt.set())
+        await client.subscribe("meta/clients/test-monitor", sub)
+
+        # Register many endpoints
+        await dut.ensure_connected()
+        await asyncio.wait([dut.register("test/num-{}".format(i),
+                                         qth.EVENT_ONE_TO_MANY, "A test")
+                            for i in range(100)], loop=event_loop)
+
+        # We should get many fewer registration messages than there were calls
+        # to register.
+        await asyncio.sleep(0.1, loop=event_loop)
+        assert sub.mock_calls[-1][1][0] == "meta/clients/test-monitor"
+        assert len(sub.mock_calls[-1][1][1]["topics"]) == 100
+        assert len(sub.mock_calls) < 100
+
+    finally:
+        await dut.close()
+
+
+@pytest.mark.asyncio
 async def test_event(client, event_loop):
     on_event_evt = asyncio.Event(loop=event_loop)
     on_event = Mock(side_effect=lambda *_: on_event_evt.set())

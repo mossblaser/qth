@@ -12,12 +12,14 @@ import traceback
 import sentinel
 import random
 import string
+import copy
 
 import aiomqtt
 
 from .version import __version__  # noqa
 
 _NOT_GIVEN = sentinel.create("_NOT_GIVEN")
+
 
 class Client(object):
     """A Qth-compliant MQTT client."""
@@ -88,7 +90,9 @@ class Client(object):
 
         # The registration data (sent to the Qth registration system) for this
         # client.
+        self._registering = asyncio.Lock(loop=self._loop)
         self._registration = {}
+        self._last_registration = None
 
         self._mqtt = aiomqtt.Client(self._loop)
 
@@ -130,7 +134,7 @@ class Client(object):
                                        in self._subscriptions])
 
             # Publish any paths to the Qth registry
-            await self.publish_registration()
+            await self.publish_registration(force=True)
 
             # Unblock anything waiting for connection to complete
             self._connected_event.set()
@@ -203,7 +207,7 @@ class Client(object):
             "behaviour": behaviour,
             "description": description
         }
-        
+
         if on_unregister is not _NOT_GIVEN:
             self._registration[path]["on_unregister"] = on_unregister
         elif delete_on_unregister:
@@ -324,21 +328,30 @@ class Client(object):
         """
         await self.set_property(topic, Empty)
 
-    async def publish_registration(self):
+    async def publish_registration(self, force=False):
         """Coroutine. For advanced users only. Publish the Qth client
         registration message, if connected.
 
         This method is called automatically upon (re)connection and when the
         registration is changed. It is unlikely you'll need to call this by
         hand.
+
+        Parameters
+        ----------
+        force : bool
+            If true, force the registration to be sent, even if it hasn't
+            changed.
         """
-        await self._publish(
-            "meta/clients/{}".format(self._client_id),
-            {
-                "description": self._description,
-                "topics": self._registration,
-            },
-            retain=True)
+        async with self._registering:
+            if self._registration != self._last_registration or force:
+                self._last_registration = copy.deepcopy(self._registration)
+                await self._publish(
+                    "meta/clients/{}".format(self._client_id),
+                    {
+                        "description": self._description,
+                        "topics": self._registration,
+                    },
+                    retain=True)
 
     async def _subscribe(self, topic):
         """(Internal use only.) Subscribe to a (set of) topic(s) and wait until
