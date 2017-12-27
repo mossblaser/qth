@@ -164,7 +164,7 @@ class Client(object):
         if message.payload is None or message.payload == b"":
             payload = Empty
         else:
-            payload = json.loads(message.payload)
+            payload = json.loads(message.payload.decode("utf-8"))
         args = (topic, payload)
 
         # If required, retain the most recent message
