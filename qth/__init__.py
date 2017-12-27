@@ -59,7 +59,7 @@ class Client(object):
             # collisions
             self._client_id = "{}-{}".format(
                 client_id,
-                "".join(random.choices(string.hexdigits, k=8)).upper())
+                "".join(random.choice(string.hexdigits) for _ in range(8)).upper())
         else:
             self._client_id = client_id
 
@@ -417,12 +417,12 @@ class Client(object):
 
         # If retain_all, create a relevant entry
         if retain_all and topic not in self._subscription_retained_message:
-            self._subscription_retained_message[topic] = None
+            self._subscription_retained_message[topic] = Empty
 
         # 'Receive' any locally retained messages for topics with retain_all
         # set.
-        retained_message = self._subscription_retained_message.get(topic, None)
-        if retained_message is not None:
+        retained_message = self._subscription_retained_message.get(topic, Empty)
+        if retained_message is not Empty:
             self._loop.create_task(self._call_func_or_coro(
                 callback, *retained_message))
 
