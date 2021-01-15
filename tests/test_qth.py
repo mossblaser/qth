@@ -6,18 +6,18 @@ import asyncio
 import qth
 
 
-@pytest.fixture("module")
+@pytest.fixture(scope="module")
 def port():
     # A port which is likely to be free for the duration of tests...
     return 11223
 
 
-@pytest.fixture("module")
+@pytest.fixture(scope="module")
 def hostname():
     return "localhost"
 
 
-@pytest.fixture("module")
+@pytest.fixture(scope="module")
 def event_loop():
     return asyncio.get_event_loop()
 
