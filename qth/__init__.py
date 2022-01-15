@@ -24,7 +24,7 @@ _NOT_GIVEN = sentinel.create("_NOT_GIVEN")
 class Client(object):
     """A Qth-compliant MQTT client."""
 
-    def __init__(self, client_id, description=None, loop=None,
+    def __init__(self, client_id, description=None,
                  make_client_id_unique=True,
                  host=None, port=None, keepalive=10):
         """Connect to an MQTT server.
@@ -39,9 +39,6 @@ class Client(object):
         description : str
             A human-readable description of the client. Defaults to being
             empty.
-        loop : asyncio.AbstractEventLoop
-            The asyncio event loop to run in. If omitted or None, uses the
-            default loop.
         make_client_id_unique : bool
             If set to False, don't add a unique, random suffix to the
             client_id.
@@ -64,7 +61,7 @@ class Client(object):
             self._client_id = client_id
 
         self._description = description
-        self._loop = loop or asyncio.get_event_loop()
+        self._loop = asyncio.get_event_loop()
 
         # Lookup from MID to future to return upon arrival of that MID.
         self._publish_mid_to_future = {}
@@ -82,15 +79,15 @@ class Client(object):
 
         # Event which is set when connecting/connected and cleared when
         # disconnected
-        self._connected_event = asyncio.Event(loop=self._loop)
+        self._connected_event = asyncio.Event()
 
         # Event which is set when disconnected and cleared when connected
-        self._disconnected_event = asyncio.Event(loop=self._loop)
+        self._disconnected_event = asyncio.Event()
         self._disconnected_event.set()
 
         # The registration data (sent to the Qth registration system) for this
         # client.
-        self._registering = asyncio.Lock(loop=self._loop)
+        self._registering = asyncio.Lock()
         self._registration = {}
         self._last_registration = None
 
@@ -364,7 +361,7 @@ class Client(object):
             raise MQTTError(result)
 
         # Wait for the subscription to be confirmed
-        future = asyncio.Future(loop=self._loop)
+        future = asyncio.Future()
         self._subscribe_mid_to_future[mid] = future
         await future
 
@@ -445,7 +442,7 @@ class Client(object):
             raise MQTTError(result)
 
         # Wait for the unsubscription to be confirmed
-        future = asyncio.Future(loop=self._loop)
+        future = asyncio.Future()
         self._unsubscribe_mid_to_future[mid] = future
         await future
 
@@ -493,7 +490,7 @@ class Client(object):
             raise MQTTError(result)
 
         # Wait for the message to be confirmed published
-        future = asyncio.Future(loop=self._loop)
+        future = asyncio.Future()
         self._publish_mid_to_future[mid] = future
         await future
 
@@ -599,7 +596,7 @@ class PropertyWatcher(object):
 
         loop = self._client._loop
 
-        self._has_been_set = asyncio.Event(loop=loop)
+        self._has_been_set = asyncio.Event()
         loop.create_task(self._client.watch_property(topic, self))
 
     def __call__(self, topic, new_value):
