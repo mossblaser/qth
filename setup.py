@@ -25,8 +25,7 @@ setup(
         "Operating System :: MacOS",
 
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5",
+        "Programming Language :: Python :: 3.10",
     ],
     keywords="mqtt asyncio home-automation messaging",
 
