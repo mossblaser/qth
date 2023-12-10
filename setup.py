@@ -30,5 +30,5 @@ setup(
     keywords="mqtt asyncio home-automation messaging",
 
     # Requirements
-    install_requires=["aiomqtt>=0.1.0", "sentinel>=0.1.1"],
+    install_requires=["aiomqtt>=0.1.0,<1.0.0", "sentinel>=0.1.1"],
 )
