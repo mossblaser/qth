@@ -18,26 +18,21 @@ def hostname():
 
 
 @pytest.fixture(scope="module")
-def event_loop():
-    return asyncio.get_event_loop()
-
-
-@pytest.fixture(scope="module")
-def server(event_loop, port):
-    mosquitto = event_loop.run_until_complete(asyncio.create_subprocess_exec(
+async def server(port):
+    mosquitto = await asyncio.create_subprocess_exec(
         "mosquitto", "-p", str(port),
         stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL))
+        stderr=asyncio.subprocess.DEVNULL)
 
     try:
         yield
     finally:
         mosquitto.terminate()
-        event_loop.run_until_complete(mosquitto.wait())
+        await mosquitto.wait()
 
 
 @pytest.fixture
-async def client(server, hostname, port, event_loop):
+async def client(server, hostname, port):
     c = qth.Client("test-client",
                    host=hostname, port=port)
     try:
@@ -47,7 +42,7 @@ async def client(server, hostname, port, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_uniqueified_id(client, event_loop):
+async def test_uniqueified_id(client):
     # Should have something appended to the supplied client ID
     assert client.client_id.startswith("test-client-")
     assert len(client.client_id) > len("test-client-")
@@ -57,12 +52,12 @@ async def test_uniqueified_id(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_initial_connection(client, event_loop):
+async def test_initial_connection(client):
     await client.ensure_connected()
 
 
 @pytest.mark.asyncio
-async def test_sub_pub_unsub(client, event_loop):
+async def test_sub_pub_unsub(client):
     # Subscribe to test/foo
     on_message_evt = asyncio.Event()
     on_message = Mock(side_effect=lambda *_: on_message_evt.set())
@@ -92,7 +87,7 @@ async def test_sub_pub_unsub(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_pub_sub_coroutine(client, event_loop):
+async def test_pub_sub_coroutine(client):
     # Subscribe to a topic with a coroutine callback.
     on_message_evt = asyncio.Event()
 
@@ -110,7 +105,7 @@ async def test_pub_sub_coroutine(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_sub_pub_unsub_multiple(client, event_loop):
+async def test_sub_pub_unsub_multiple(client):
     # Subscribe to the same topic several times
     callback_a = Mock(side_effect=Exception())
     callback_b = Mock()
@@ -146,7 +141,7 @@ async def test_sub_pub_unsub_multiple(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_register(client, hostname, port, event_loop):
+async def test_register(client, hostname, port):
     # NB: as a side effect, this test also tests the make_client_id_unique
     # option can be overridden.
 
@@ -245,7 +240,7 @@ async def test_register(client, hostname, port, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_register_merging(client, hostname, port, event_loop):
+async def test_register_merging(client, hostname, port):
     # Make a client to check the registrations of
     dut = qth.Client("test-monitor", "A test client.",
                      make_client_id_unique=False,
@@ -258,9 +253,9 @@ async def test_register_merging(client, hostname, port, event_loop):
 
         # Register many endpoints
         await dut.ensure_connected()
-        await asyncio.wait([dut.register("test/num-{}".format(i),
-                                         qth.EVENT_ONE_TO_MANY, "A test")
-                            for i in range(100)])
+        await asyncio.gather(*[dut.register("test/num-{}".format(i),
+                                            qth.EVENT_ONE_TO_MANY, "A test")
+                               for i in range(100)])
 
         # We should get many fewer registration messages than there were calls
         # to register.
@@ -274,7 +269,7 @@ async def test_register_merging(client, hostname, port, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_event(client, event_loop):
+async def test_event(client):
     on_event_evt = asyncio.Event()
     on_event = Mock(side_effect=lambda *_: on_event_evt.set())
     await client.watch_event("test/event", on_event)
@@ -299,7 +294,7 @@ async def test_event(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_property(client, event_loop):
+async def test_property(client):
     on_property_evt = asyncio.Event()
     on_property = Mock(side_effect=lambda *_: on_property_evt.set())
     await client.watch_property("test/property", on_property)
@@ -318,7 +313,7 @@ async def test_property(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_delete_property(client, event_loop):
+async def test_delete_property(client):
     # Check property values are usually retained
     await client.set_property("test/deleted-property", {"hello": "world"})
     on_property_evt = asyncio.Event()
@@ -344,7 +339,7 @@ async def test_delete_property(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_property_watcher(client, event_loop):
+async def test_property_watcher(client):
     # Ensure initial value gets through
     await client.set_property("test/property", 123)
     property = await client.get_property("test/property")
@@ -381,7 +376,7 @@ async def test_property_watcher(client, event_loop):
 
 
 @pytest.mark.asyncio
-async def test_retain_all(client, event_loop):
+async def test_retain_all(client):
     # Ensure the subscription 'retain-all' mode allows multiple subscriptions
     # to a single property to work.
 
